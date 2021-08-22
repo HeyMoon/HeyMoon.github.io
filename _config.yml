@@ -3,13 +3,13 @@
 ## Source: https://github.com/hexojs/hexo/
 
 # Site
-title: HeyMoon‘s cyber log
+title: HeyMoon's cyber log
 subtitle: ''
-description: 'HeyMoon‘s cyber log'
+description: 'HeyMoon's cyber log'
 keywords:
 author: Hey Moon
-language: en
-timezone: ''
+language: zh
+timezone: 'Asia/Shanghai'
 
 # URL
 ## Set your site url here. For example, if you use GitHub Page, set url as 'https://username.github.io/project'
