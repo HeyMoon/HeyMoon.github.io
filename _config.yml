@@ -104,7 +104,7 @@ theme: next
 deploy:
   type: git
   repo: git@github.com:HeyMoon/HeyMoon.github.io.git
-  branch: main
+  branch: master
   name: HeyMoon
   email: tasakayu.dn@gmail.com
 
