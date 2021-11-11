@@ -1,5 +1,5 @@
 ---
-title: introduce_cdn
+title: Introduce CDN
 date: 2021-11-10 21:29:04
 tags: 
     - CDN
@@ -18,6 +18,8 @@ CDN(Content Delivery Network) 是一个全球性的分布式网络服务，它�
 
 #### pull CDNs
 Pull CDN 在第一个用户请求内容时从服务器上抓取新内容。这将会导致第一个请求变慢，但是当第二次访问该资源时，CDN 上已经缓存了该资源，就可以直接返回。
+
+<!--more-->
 
 TTL(Time To Live) 决定一个指定资源的存活时间，单位是秒。
 

@@ -1,5 +1,5 @@
 ---
-title: introduce_dns
+title: Introduce DNS
 date: 2021-11-02 22:22:01
 tags: 
     - DNS
@@ -14,6 +14,8 @@ categories:
 DNS 起源于互联网的早期，当时互联网是美国国防部为研究目的建立的一个小网络。该网络中计算机的主机名是通过使用位于集中管理的服务器上的单个HOSTS文件进行管理的。需要解决网络主机名的每个站点都下载了此文件。随着互联网上主机数量的增加，更新过程产生的流量以及HOSTS文件的大小也增加了。对新系统的需求变得越来越明显，该系统将提供可伸缩性、分散管理、支持各种数据类型等功能。
 
 1984年引入的 DNS 成为这个新系统。使用 DNS，主机名存在一个数据库中，该数据库可以分布在多台服务器之间，减少了任何一台服务器的负载，并提供了按分区管理此命名系统的能力。DNS支持分层名称，除了HOSTS文件中使用的主机名称到IP地址映射外，还允许注册各种数据类型。由于DNS数据库是分布式的，因此当添加更多服务器时，其潜在大小是无限的，性能不会下降。
+
+<!--more-->
 
 最初的 DNS 基于 Request for Comment (RFC) 882 (Domain Names: Concepts and Facilities) 和 RFC 883 (Domain Names–Implementation and Specification)，随后被 RFC 1034 (Domain Names–Concepts and Facilities), and RFC 1035 (Domain Names–Implementation and Specification) 所取代。
 
