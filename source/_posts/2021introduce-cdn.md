@@ -35,4 +35,4 @@ Push CDN 会增加服务器的负担（因为需要推送内容到 CDN）。或�
 Pull CDN 可以帮助高流量的小型下载网站，在CDN服务器上保留最受欢迎的内容。内容的后续更新（或 "Pull"）并不频繁，不足以使成本上升到 Push CDN 的水平。换而言之，高流量站点使用 Pull CDN 效果不错，因为只有最近请求的内容保存在 CDN 中，流量才能更平衡地分散。
 
 参考文献：
-![The Differences Between Push And Pull CDNs](http://www.travelblogadvice.com/technical/the-differences-between-push-and-pull-cdns/)
+[The Differences Between Push And Pull CDNs](http://www.travelblogadvice.com/technical/the-differences-between-push-and-pull-cdns/)

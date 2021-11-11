@@ -26,7 +26,7 @@ DNS的实现——Berkeley Internet Name Domain（BIND）——最初是为4.3 B
 
 完全限定域名（FQDN,fully qualify domain name）通过指定从引用主机到根的路径中用点分隔的名称列表，唯一标识主机在DNS层次树中的位置。下图显示了Microsoft.com.域中具有名为mydomain的主机的DNS树示例。主机的FQDN将是 mydomain.microsoft.com。
 
-![](./dns-name-spaces.gif)
+![dns-name-spaces](./dns-name-spaces.gif)
 
 从技术上讲，树中使用的任何DNS域名都是一个域名。然而，大多数DNS讨论都根据名称的级别和常用方式，以五种方式之一识别名称。例如，注册到微软（microsoft.com.）的DNS域名被称为二级域名。这是因为名称有两个部分（称为标签），表明它位于树根或树顶部下方的两个级别。大多数DNS域名有两个或多个标签，每个标签都表示树中的新级别。句点用于名称来分隔标签。
 
@@ -84,7 +84,7 @@ DNS 查找的这 8 个步骤返回 example.com 的 IP 地址后，浏览器便�
 9. 浏览器向该 IP 地址发出 HTTP 请求。
 10. 位于该 IP 的服务器返回将在浏览器中呈现的网页（第 10 步）。
 
-![](./dns-lookup-diagram.png)
+![dns-lookup](./dns-lookup-diagram.png)
 
 ### DNS 查询有哪些类型？
 
@@ -167,9 +167,10 @@ server3.fqdn 1
 
 
 
-参考：
-https://www.cloudflare.com/zh-cn/learning/dns/what-is-dns/
+参考:
 
-https://docs.microsoft.com/en-us/previous-versions/windows/it-pro/windows-server-2008-R2-and-2008/dd197427(v=ws.10)?redirectedfrom=MSDN
+[what is dns](https://www.cloudflare.com/zh-cn/learning/dns/what-is-dns/)
 
-https://www.nginx.com/resources/glossary/dns-load-balancing/
+[dns](https://docs.microsoft.com/en-us/previous-versions/windows/it-pro/windows-server-2008-R2-and-2008/dd197427(v=ws.10)?redirectedfrom=MSDN)
+
+[dns balancing](https://www.nginx.com/resources/glossary/dns-load-balancing/)
