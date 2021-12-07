@@ -1,0 +1,434 @@
+<?xml version="1.0" encoding="utf-8"?>
+<search>
+  <entry>
+    <title>Redis Cluster</title>
+    <url>/2021/12/07/Redis-Cluster/</url>
+    <content><![CDATA[<p>当公司业务发展，数据量增加到一定程度后，我们总是绕不开分布式这个话题。这个问题牵扯很多方面，</p>
+<ul>
+<li><p>分区策略（Sharding）</p>
+</li>
+<li><p>数据备份：数据备份什么时候做？粒度是什么？怎样备份？</p>
+</li>
+<li><p>分区再平衡：当数据分布发生拓扑变化的时候，怎么把数据从原来的节点迁移到新的节点上？</p>
+</li>
+<li><p>集群管理：如何管理整个集群，如何把用户请求定向到某个特定的节点上？</p>
+</li>
+</ul>
+<p>这些问题很很多不同的解法，比如分片策略，不同的数据库可能选择不同的分片策略，比如 Hbase 采用基于关键字区间的分区，Cassandra,MongoDB,Redis 采用基于关键字哈希值分区。我们不妨来看看开源社区中使用最普遍的分布式解决方案之一：Redis Cluster，看看它是如何解决分布式的问题。</p>
+<span id="more"></span>
+
+<h2 id="Redis-Cluster"><a href="#Redis-Cluster" class="headerlink" title="Redis Cluster"></a>Redis Cluster</h2><p>Redis Cluster是一个Redis的分布式部署形式，使用数据分区的办法把数据分配到不同的节点；每个节点可以有自己的备份节点（一个或多个）。整个集群之上另有一个叫做Redis Sentinel的分布式组件用以提供更丰富的HA能力。</p>
+<h3 id="数据分区"><a href="#数据分区" class="headerlink" title="数据分区"></a>数据分区</h3><p>Redis Cluster 使用 Slot(槽)的概念，集群的整个数据库被分为 16384 个 slot，16384个 slot 可以分给集群中的多个节点。Redis 把每个key的值 hash(CRC16) 成 0 ~ 16383 之间的一个数。这个 hash 值被用来确定对应的数据存储在哪个 slot 。集群中的每个节点都存储了一份类似路由表的东西，描述每个节点所拥有的 Slots。假设集群里有3个节点(node1, node2, node3)，我们可以这样分配 slot ：</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">node1: 0 ~ 5000</span><br><span class="line">node2: 5001 ~ 10000</span><br><span class="line">node3: 10001 ~ 16383</span><br></pre></td></tr></table></figure>
+
+<p>Redis 使用一下算法来计算给定的 key 属于哪个槽：</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">def slot_number(key):</span><br><span class="line">    return CRC16(key) &amp; 16383</span><br></pre></td></tr></table></figure>
+
+<p>Slot 是集群数据管理和迁移的最小单位，保证数据管理的粒度易于管理。集群中的每个节点都知道 Slot 在集群中的分布，节点之间使用 Gossip 协议通信。</p>
+<p>当数据库中的 16384 个槽都有节点在处理时，集群处于上线状态(ok)；如果数据库中有任何一个槽没有得到处理，那么集群处于下线状态(fail)。</p>
+<h3 id="数据备份"><a href="#数据备份" class="headerlink" title="数据备份"></a>数据备份</h3><p>Redis的备份是最简单的 Master-Slave 异步复制(AOF)备份。每个 Master 节点都可以有若干个 Slave 跟随；Slave（Replica）可以提供高可靠性（HA)，也可以用作只读节点提供高吞吐量。</p>
+<h3 id="分区再平衡"><a href="#分区再平衡" class="headerlink" title="分区再平衡"></a>分区再平衡</h3><p>分区再平衡，也叫重新分片(Reshard)一般是因为有节点的变化（有节点下线，或者有新的节点加入）。简单的讲，Reshard就是把一些slots从一个节点转移到另一个节点。</p>
+<p>Reshard 的原理并不复杂，基于 redis-trib 对集群的单个 slot 进行重新分片的步骤如下：</p>
+<ul>
+<li><p>redis-trib 对目标节点发送 Cluster setslot <slot> importing <source_id> 命令，让目标节点准备好从源节点导入(import) 属于槽 slot 的键值对</p>
+</li>
+<li><p>redis-trib 对源节点发送 Cluster setslot <slot> migrating <target_id> 命令，让源节点准备好将属于槽 slot 的键值对迁移(migrate)至目标节点</p>
+</li>
+<li><p>redis-trib 将键值对从源节点迁移至目标节点</p>
+</li>
+<li><p>redis-trib 将槽 slot 指派给集群中的任意一个节点，并通过消息发送至整个集群，最终集群中所有节点都会知道槽 slot 被指派给了目标节点。</p>
+</li>
+</ul>
+<h3 id="集群管理"><a href="#集群管理" class="headerlink" title="集群管理"></a>集群管理</h3><p>Redis Cluster 集群管理引入了一个新的组件，叫做 Redis Sentinel，在整个集群的纬度上提供高可用的能力。简单的讲，它类似一个集群的Registry，包含监控、报警、自动切换、配置管理等常见功能。另外，Sentinel本身也是分布式部署，采用 Raft 算法维持状态的一致性。</p>
+<ul>
+<li>Sentinels 监视所有的数据节点</li>
+<li>Sentinels 监视所有其他 Sentinels</li>
+<li>当 Sentinels 对节点宕机达成共识之后，选举出一个新的master（升级）并完成故障转移</li>
+</ul>
+<h3 id="Redis-Cluster-配置"><a href="#Redis-Cluster-配置" class="headerlink" title="Redis Cluster 配置"></a>Redis Cluster 配置</h3><figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">bind 127.0.0.1 -::1</span><br><span class="line">port 7379</span><br><span class="line">daemonize yes</span><br><span class="line">pidfile /Users/dengyunhui/Documents/install/redis-6.2.6/config/cluster/redis_7379.pid</span><br><span class="line">loglevel debug</span><br><span class="line">logfile /Users/dengyunhui/Documents/install/redis-6.2.6/config/cluster/redis_7379.log</span><br><span class="line">cluster-enabled yes</span><br><span class="line">cluster-config-file nodes-7379.conf</span><br><span class="line">cluster-node-timeout 15000</span><br></pre></td></tr></table></figure>
+
+<p>新建文件 <code>cluster-7379.conf</code>,同时复制出五个节点配置：</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">cp cluster-7379.conf cluster-7380.conf</span><br><span class="line">cp cluster-7379.conf cluster-7381.conf</span><br><span class="line">cp cluster-7379.conf cluster-7382.conf</span><br><span class="line">cp cluster-7379.conf cluster-7383.conf</span><br><span class="line">cp cluster-7379.conf cluster-7384.conf</span><br></pre></td></tr></table></figure>
+
+<p>删除数据目录下的所有文件,启动 6 个节点：</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">➜  bin ./redis-server ../config/cluster/cluster-7379.conf</span><br><span class="line">➜  bin ./redis-server ../config/cluster/cluster-7380.conf</span><br><span class="line">➜  bin ./redis-server ../config/cluster/cluster-7381.conf</span><br><span class="line">➜  bin ./redis-server ../config/cluster/cluster-7382.conf</span><br><span class="line">➜  bin ./redis-server ../config/cluster/cluster-7383.conf</span><br><span class="line">➜  bin ./redis-server ../config/cluster/cluster-7384.conf</span><br></pre></td></tr></table></figure>
+
+<p>如果在之前的集群中的某个节点存储过数据或者集群配置没有删除，会报类似错误 ** [ERR] Node 127.0.0.1:7379 is not empty. Either the node already knows other nodes (check with CLUSTER NODES) or contains some key in database 0. ** 如果集群配置未删除，则删除所有集群配置，否则进入之前存储数据的客户端执行 flushall 和 cluster reset 清空数据并重置集群。<br>然后重新启动所有节点。只需键入以下内容即可为 Redis 6 创建集群：</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">../../bin/redis-cli --cluster create 127.0.0.1:7379 127.0.0.1:7380 127.0.0.1:7381 127.0.0.1:7382 127.0.0.1:7383 127.0.0.1:7384 --cluster-replicas 1</span><br></pre></td></tr></table></figure>
+
+<p>create 后面跟着的是6个节点的地址和端口，选项–cluster-replicas 1意味着为每个主节点都提供一个从节点。出现如下结果即表示创建成功：</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">&gt;&gt;&gt; Performing hash slots allocation on 6 nodes...</span><br><span class="line">Master[0] -&gt; Slots 0 - 5460</span><br><span class="line">Master[1] -&gt; Slots 5461 - 10922</span><br><span class="line">Master[2] -&gt; Slots 10923 - 16383</span><br><span class="line">Adding replica 127.0.0.1:7383 to 127.0.0.1:7379</span><br><span class="line">Adding replica 127.0.0.1:7384 to 127.0.0.1:7380</span><br><span class="line">Adding replica 127.0.0.1:7382 to 127.0.0.1:7381</span><br><span class="line">&gt;&gt;&gt; Trying to optimize slaves allocation for anti-affinity</span><br><span class="line">[WARNING] Some slaves are in the same host as their master</span><br><span class="line">M: 4ebf3cedca6bcd9ebcadcdaf8d6f591656cf9b4a 127.0.0.1:7379</span><br><span class="line">   slots:[0-5460] (5461 slots) master</span><br><span class="line">M: 6c9e8b7d86e466d0d63c9ceb6603441126158c0b 127.0.0.1:7380</span><br><span class="line">   slots:[5461-10922] (5462 slots) master</span><br><span class="line">M: 82b9f8c549d79c99265dbe89ed286413a260826a 127.0.0.1:7381</span><br><span class="line">   slots:[10923-16383] (5461 slots) master</span><br><span class="line">S: c79437759320e52f5838b1c942ef9ba90b20e32f 127.0.0.1:7382</span><br><span class="line">   replicates 4ebf3cedca6bcd9ebcadcdaf8d6f591656cf9b4a</span><br><span class="line">S: bfc699dbe7967ea0d41dcef430b926ae988ce91a 127.0.0.1:7383</span><br><span class="line">   replicates 6c9e8b7d86e466d0d63c9ceb6603441126158c0b</span><br><span class="line">S: 7919d0bc8c0cd1fc2966ca770106671a97787f1a 127.0.0.1:7384</span><br><span class="line">   replicates 82b9f8c549d79c99265dbe89ed286413a260826a</span><br><span class="line">Can I set the above configuration? (type &#x27;yes&#x27; to accept): yes</span><br><span class="line">&gt;&gt;&gt; Nodes configuration updated</span><br><span class="line">&gt;&gt;&gt; Assign a different config epoch to each node</span><br><span class="line">&gt;&gt;&gt; Sending CLUSTER MEET messages to join the cluster</span><br><span class="line">Waiting for the cluster to join</span><br><span class="line">.</span><br><span class="line">&gt;&gt;&gt; Performing Cluster Check (using node 127.0.0.1:7379)</span><br><span class="line">M: 4ebf3cedca6bcd9ebcadcdaf8d6f591656cf9b4a 127.0.0.1:7379</span><br><span class="line">   slots:[0-5460] (5461 slots) master</span><br><span class="line">   1 additional replica(s)</span><br><span class="line">S: c79437759320e52f5838b1c942ef9ba90b20e32f 127.0.0.1:7382</span><br><span class="line">   slots: (0 slots) slave</span><br><span class="line">   replicates 4ebf3cedca6bcd9ebcadcdaf8d6f591656cf9b4a</span><br><span class="line">M: 6c9e8b7d86e466d0d63c9ceb6603441126158c0b 127.0.0.1:7380</span><br><span class="line">   slots:[5461-10922] (5462 slots) master</span><br><span class="line">   1 additional replica(s)</span><br><span class="line">M: 82b9f8c549d79c99265dbe89ed286413a260826a 127.0.0.1:7381</span><br><span class="line">   slots:[10923-16383] (5461 slots) master</span><br><span class="line">   1 additional replica(s)</span><br><span class="line">S: bfc699dbe7967ea0d41dcef430b926ae988ce91a 127.0.0.1:7383</span><br><span class="line">   slots: (0 slots) slave</span><br><span class="line">   replicates 6c9e8b7d86e466d0d63c9ceb6603441126158c0b</span><br><span class="line">S: 7919d0bc8c0cd1fc2966ca770106671a97787f1a 127.0.0.1:7384</span><br><span class="line">   slots: (0 slots) slave</span><br><span class="line">   replicates 82b9f8c549d79c99265dbe89ed286413a260826a</span><br><span class="line">[OK] All nodes agree about slots configuration.</span><br><span class="line">&gt;&gt;&gt; Check for open slots...</span><br><span class="line">&gt;&gt;&gt; Check slots coverage...</span><br><span class="line">[OK] All 16384 slots covered.</span><br></pre></td></tr></table></figure>
+
+<p>使用 Redis 客户端登录 7379 服务器,使用 <code>cluster info</code> 查看集群状态：</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">➜  bin ./redis-cli -c -p 7379</span><br><span class="line">127.0.0.1:7379&gt; cluster info</span><br><span class="line">cluster_state:ok</span><br><span class="line">cluster_slots_assigned:16384</span><br><span class="line">cluster_slots_ok:16384</span><br><span class="line">cluster_slots_pfail:0</span><br><span class="line">cluster_slots_fail:0</span><br><span class="line">cluster_known_nodes:6</span><br><span class="line">cluster_size:3</span><br><span class="line">cluster_current_epoch:6</span><br><span class="line">cluster_my_epoch:1</span><br><span class="line">cluster_stats_messages_ping_sent:2266</span><br><span class="line">cluster_stats_messages_pong_sent:2152</span><br><span class="line">cluster_stats_messages_sent:4418</span><br><span class="line">cluster_stats_messages_ping_received:2147</span><br><span class="line">cluster_stats_messages_pong_received:2266</span><br><span class="line">cluster_stats_messages_meet_received:5</span><br><span class="line">cluster_stats_messages_received:4418</span><br></pre></td></tr></table></figure>
+
+<h3 id="Redis-cluster-使用"><a href="#Redis-cluster-使用" class="headerlink" title="Redis cluster 使用"></a>Redis cluster 使用</h3><h4 id="redis-cli-以集群方式启动"><a href="#redis-cli-以集群方式启动" class="headerlink" title="redis-cli 以集群方式启动"></a>redis-cli 以集群方式启动</h4><p>redis-cli 记得要加 <code>-c</code> 以集群模式启动。</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">➜  bin ./redis-cli -c -p 7379</span><br><span class="line"></span><br><span class="line">127.0.0.1:7379&gt; set fruits apple</span><br><span class="line">-&gt; Redirected to slot [14943] located at 127.0.0.1:7381</span><br><span class="line">OK</span><br></pre></td></tr></table></figure>
+
+<p>当在 7379 使用 <code>set</code> 来设置 <code>fruits</code> 的值时，对应的槽为 14943，这个槽是属于 7381 节点负责的，所以集群模式会自动重定向到 7381 节点来完成 set key 命令。</p>
+<h4 id="重新分片"><a href="#重新分片" class="headerlink" title="重新分片"></a>重新分片</h4><p>重新分片其实也就是槽的迁移。将 Slot 从一个或几个节点迁移到另一个节点。<br>Redis官方也是提供了命令用来重新分片的，如果 Redis 的版本是 3 或者 4 的话使用redis-trib.rb这个工具，如果 Redis 的版本为 5-6的话，可以使用如下命令：</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">redis-cli --cluster reshard 127.0.0.1:7379</span><br></pre></td></tr></table></figure>
+
+<p>在这里只需要指定一个节点，redis-cli将自动找到其他节点。<br>首先会测试集群的运行状态，然后询问你要重新分配多少个槽(我这里指定了1000个槽)。 <span style="background-color: #FF0000">How many slots do you want to move (from 1 to 16384)?</span> 然后我们需要指定重新分片的目标ID(也就是指定哪个节点来接收这些重新分配的槽)。可以通过以下命令来查看某个节点的信息(里面包括了节点的ID)。</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">redis-cli -p 7379 cluster nodes | grep myself</span><br><span class="line">872e3876ea53a1ba1a77af3fb5a8c72704ac0eab 127.0.0.1:7379@16379 myself,master - 0 1580801413000 7 connected 0-5961 10923-11421</span><br></pre></td></tr></table></figure>
+
+<p>最终需要指定从哪些节点获取槽(这里简单的指定all也就是所有的节点)。就会开始执行重新分片了，通过终端可以看到槽正在从一个节点移动到另一个节点。<br>最后检查集群状态可以发现目标节点的槽数量变成了6461</p>
+<p>输入 <code>cluster slots</code> 查看集群节点 slot 的分配情况：</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">127.0.0.1:7379&gt; cluster slots</span><br><span class="line">1) 1) (integer) 0</span><br><span class="line">   2) (integer) 5460</span><br><span class="line">   3) 1) &quot;127.0.0.1&quot;</span><br><span class="line">      2) (integer) 7379</span><br><span class="line">      3) &quot;4ebf3cedca6bcd9ebcadcdaf8d6f591656cf9b4a&quot;</span><br><span class="line">   4) 1) &quot;127.0.0.1&quot;</span><br><span class="line">      2) (integer) 7382</span><br><span class="line">      3) &quot;c79437759320e52f5838b1c942ef9ba90b20e32f&quot;</span><br><span class="line">2) 1) (integer) 5461</span><br><span class="line">   2) (integer) 10922</span><br><span class="line">   3) 1) &quot;127.0.0.1&quot;</span><br><span class="line">      2) (integer) 7380</span><br><span class="line">      3) &quot;6c9e8b7d86e466d0d63c9ceb6603441126158c0b&quot;</span><br><span class="line">   4) 1) &quot;127.0.0.1&quot;</span><br><span class="line">      2) (integer) 7383</span><br><span class="line">      3) &quot;bfc699dbe7967ea0d41dcef430b926ae988ce91a&quot;</span><br><span class="line">3) 1) (integer) 10923</span><br><span class="line">   2) (integer) 16383</span><br><span class="line">   3) 1) &quot;127.0.0.1&quot;</span><br><span class="line">      2) (integer) 7381</span><br><span class="line">      3) &quot;82b9f8c549d79c99265dbe89ed286413a260826a&quot;</span><br><span class="line">   4) 1) &quot;127.0.0.1&quot;</span><br><span class="line">      2) (integer) 7384</span><br><span class="line">      3) &quot;7919d0bc8c0cd1fc2966ca770106671a97787f1a&quot;</span><br></pre></td></tr></table></figure>
+
+<h4 id="故障转移"><a href="#故障转移" class="headerlink" title="故障转移"></a>故障转移</h4><p>先查看当前集群中的节点：</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">➜  cluster ../../bin/redis-cli -p 7379 cluster nodes</span><br><span class="line">bfc699dbe7967ea0d41dcef430b926ae988ce91a 127.0.0.1:7383@17383 slave 6c9e8b7d86e466d0d63c9ceb6603441126158c0b 0 1638885135833 2 connected</span><br><span class="line">82b9f8c549d79c99265dbe89ed286413a260826a 127.0.0.1:7381@17381 master - 0 1638885134819 3 connected 10923-16383</span><br><span class="line">6c9e8b7d86e466d0d63c9ceb6603441126158c0b 127.0.0.1:7380@17380 master - 0 1638885136847 2 connected 5461-10922</span><br><span class="line">7919d0bc8c0cd1fc2966ca770106671a97787f1a 127.0.0.1:7384@17384 slave 82b9f8c549d79c99265dbe89ed286413a260826a 0 1638885133810 3 connected</span><br><span class="line">c79437759320e52f5838b1c942ef9ba90b20e32f 127.0.0.1:7382@17382 slave 4ebf3cedca6bcd9ebcadcdaf8d6f591656cf9b4a 0 1638885133000 1 connected</span><br><span class="line">4ebf3cedca6bcd9ebcadcdaf8d6f591656cf9b4a 127.0.0.1:7379@17379 myself,master - 0 1638885134000 1 connected 0-5460 [14943-&lt;-82b9f8c549d79c99265dbe89ed286413a260826a]</span><br></pre></td></tr></table></figure>
+
+<p>从上面可以看出集群中节点：</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">7379(master) -&gt; 7382(slave)</span><br><span class="line">7380(master) -&gt; 7383(slave)</span><br><span class="line">7381(master) -&gt; 7384(slave)</span><br></pre></td></tr></table></figure>
+
+<p>我们使用命令 <code>debug segfault</code> 让 7380 节点崩溃，我们预计 7380 崩溃之后，7383 会成为新的 master 节点。</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">./redis-cli -p 7380 debug segfault</span><br></pre></td></tr></table></figure>
+
+<p>然后等待一段时间，再次使用 <code>cluster nodes</code> 查看集群节点，我们发现已经自动完成了故障转移：</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">➜  bin ./redis-cli -p 7379 cluster nodes</span><br><span class="line">bfc699dbe7967ea0d41dcef430b926ae988ce91a 127.0.0.1:7383@17383 master - 0 1638885610213 7 connected 5461-10922</span><br><span class="line">82b9f8c549d79c99265dbe89ed286413a260826a 127.0.0.1:7381@17381 master - 0 1638885608000 3 connected 10923-16383</span><br><span class="line">6c9e8b7d86e466d0d63c9ceb6603441126158c0b 127.0.0.1:7380@17380 master,fail - 1638885553442 1638885548000 2 disconnected</span><br><span class="line">7919d0bc8c0cd1fc2966ca770106671a97787f1a 127.0.0.1:7384@17384 slave 82b9f8c549d79c99265dbe89ed286413a260826a 0 1638885609197 3 connected</span><br><span class="line">c79437759320e52f5838b1c942ef9ba90b20e32f 127.0.0.1:7382@17382 slave 4ebf3cedca6bcd9ebcadcdaf8d6f591656cf9b4a 0 1638885608182 1 connected</span><br><span class="line">4ebf3cedca6bcd9ebcadcdaf8d6f591656cf9b4a 127.0.0.1:7379@17379 myself,master - 0 1638885608000 1 connected 0-5460 [14943-&lt;-82b9f8c549d79c99265dbe89ed286413a260826a]</span><br></pre></td></tr></table></figure>
+
+<p>再次启动 7380 ，cluster 会重新将它加入集群，并让它成为从节点最少的那个master节点的从节点(在这里就是 7383)。</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">➜  bin ./redis-cli -p 7379 cluster nodes</span><br><span class="line">bfc699dbe7967ea0d41dcef430b926ae988ce91a 127.0.0.1:7383@17383 master - 0 1638885777395 7 connected 5461-10922</span><br><span class="line">82b9f8c549d79c99265dbe89ed286413a260826a 127.0.0.1:7381@17381 master - 0 1638885777000 3 connected 10923-16383</span><br><span class="line">6c9e8b7d86e466d0d63c9ceb6603441126158c0b 127.0.0.1:7380@17380 slave bfc699dbe7967ea0d41dcef430b926ae988ce91a 0 1638885776384 7 connected</span><br><span class="line">7919d0bc8c0cd1fc2966ca770106671a97787f1a 127.0.0.1:7384@17384 slave 82b9f8c549d79c99265dbe89ed286413a260826a 0 1638885776000 3 connected</span><br><span class="line">c79437759320e52f5838b1c942ef9ba90b20e32f 127.0.0.1:7382@17382 slave 4ebf3cedca6bcd9ebcadcdaf8d6f591656cf9b4a 0 1638885778406 1 connected</span><br><span class="line">4ebf3cedca6bcd9ebcadcdaf8d6f591656cf9b4a 127.0.0.1:7379@17379 myself,master - 0 1638885776000 1 connected 0-5460 [14943-&lt;-82b9f8c549d79c99265dbe89ed286413a260826a]</span><br></pre></td></tr></table></figure>
+
+<h4 id="手动故障转移"><a href="#手动故障转移" class="headerlink" title="手动故障转移"></a>手动故障转移</h4><p>随便进入一个从节点(只能是从节点)中，执行 <code>cluster failover</code> 进行手动故障转移(手动故障转移只是将主节点和从节点的关系换了一下)。</p>
+<h4 id="增加-删除节点"><a href="#增加-删除节点" class="headerlink" title="增加/删除节点"></a>增加/删除节点</h4><h5 id="增加节点"><a href="#增加节点" class="headerlink" title="增加节点"></a>增加节点</h5><p>按照之前的配置，新增加一个节点 cluster-7385.conf ，然后启动它。使用以下命令将它加入到集群中。</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line"># 127.0.0.1:7385 指的是新加入集群中的节点的ip和端口</span><br><span class="line"># 127.0.0.1:7379 指的是集群中的某个节点的ip和地址(随便哪个节点都行)</span><br><span class="line">redis-cli --cluster add-node 127.0.0.1:7385 127.0.0.1:7379</span><br></pre></td></tr></table></figure>
+
+<p>其实这个命令的作用和cluster meet是一样的，就是用于节点握手通信(唯一不一样的就是执行前会检查集群的状态)。<br>还记得之前手动搭建集群的时候，节点握手完成后需要给节点分配槽。因为这里的16384个槽都已经分完了，所以这里使用重新分片来给新节点分配槽(新节点就是重新分片的目标节点)。</p>
+<h4 id="删除节点"><a href="#删除节点" class="headerlink" title="删除节点"></a>删除节点</h4><p>要删除一个从节点，只需使用del-node命令：</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line"># 127.0.0.1:7379 是集群中的任意一个节点Ip和端口</span><br><span class="line"># node-id就是要删除的节点ID</span><br><span class="line">redis-cli --cluster del-node 127.0.0.1:7379 &lt;node-id&gt;</span><br></pre></td></tr></table></figure>
+
+<p>也可以用相同的方法删除主节点，但是要删除主节点，它必须为空。如果主节点不为空，则需要先将数据从其重新分片到所有其他主节点。否则可以使用手动故障转移的方式将主节点降为从节点，然后再执行删除。</p>
+<p>这里以删除之前添加的 7385 节点为例。该节点共有1999个槽，所以在我们删除节点之前需要将这些槽迁移到其它节点上。这里我将槽全部迁移到目标节点 7384 上，将被删除的节点 7385 作为源节点。</p>
+<p>redis-cli –cluster reshard 127.0.0.1:6374</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">How many slots do you want to move (from 1 to 16384)? 1999</span><br><span class="line">What is the receiving node ID?</span><br><span class="line">f96b0261c775cf10a254f28374a4ed73c2977b1b # 目标节点redis-6375的ID</span><br><span class="line">Please enter all the source node IDs.</span><br><span class="line">  Type &#x27;all&#x27; to use all the nodes as source nodes for the hash slots.</span><br><span class="line">  Type &#x27;done&#x27; once you entered all the source nodes IDs.</span><br><span class="line">Source node #1: 533168c99a03b5593408818dabc1db36396a221f # 源节点redis-6373的ID</span><br><span class="line">Source node #2: done # 只有一个源节点，输入done结束</span><br></pre></td></tr></table></figure>
+
+<p>复制代码迁移结束后检查集群状态,可以发现redis-6373节点的槽为0，然后就可以放心的删除节点啦。</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">redis-cli --cluster check 127.0.0.1:6375</span><br><span class="line">127.0.0.1:6375 (f96b0261...) -&gt; 0 keys | 6356 slots | 1 slaves.</span><br><span class="line">127.0.0.1:6374 (10e8962e...) -&gt; 1 keys | 5672 slots | 1 slaves.</span><br><span class="line">127.0.0.1:6373 (533168c9...) -&gt; 0 keys | 0 slots | 0 slaves.</span><br><span class="line">127.0.0.1:6376 (e80c00d0...) -&gt; 0 keys | 4356 slots | 1 slaves.</span><br></pre></td></tr></table></figure>
+
+<p>复制代码安全的将redis-6373节点从集群中删除（通过日志可以发现，其实redis是先调用 cluster forget忘记节点，然后再将节点下线）</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">redis-cli --cluster del-node 127.0.0.1:6375 533168c99a03b5593408818dabc1db36396a221f</span><br><span class="line">&gt;&gt;&gt; Removing node 533168c99a03b5593408818dabc1db36396a221f from cluster 127.0.0.1:6375</span><br><span class="line">&gt;&gt;&gt; Sending CLUSTER FORGET messages to the cluster...</span><br><span class="line">&gt;&gt;&gt; SHUTDOWN the node.</span><br></pre></td></tr></table></figure>
+
+
+<p>参考：</p>
+<p><a href="https://redis.io/topics/cluster-tutorial">Redis Tutorial</a></p>
+]]></content>
+  </entry>
+  <entry>
+    <title>Redis主从-Sentinel配置</title>
+    <url>/2021/12/07/Redis%E4%B8%BB%E4%BB%8E-Sentinel%E9%85%8D%E7%BD%AE/</url>
+    <content><![CDATA[<ol>
+<li><p>下载Redis</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">wget http://download.redis.io/releases/redis-6.2.6.tar.gz</span><br></pre></td></tr></table></figure></li>
+<li><p>解压</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">tar zxvf redis-6.2.6.tar.gz</span><br></pre></td></tr></table></figure></li>
+<li><p>进入Redis源码</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">cd redis-6.2.6</span><br></pre></td></tr></table></figure>
+<span id="more"></span></li>
+<li><p>编译</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">make</span><br></pre></td></tr></table></figure></li>
+</ol>
+<p>编译好之后会在<code>src</code>目录生成一些可执行文件.为了方便，我们把一些文件拷贝到<code>redis</code>目录。</p>
+<p>在 <code>/usr/local</code>下创建需要的目录。</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">cd /usr/local</span><br><span class="line">sudo mkdir redis</span><br></pre></td></tr></table></figure>
+
+<p><code>/usr/local/redis</code> 目录创建成功，需要修改<code>redis目录所有者</code></p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">sudo chown -R user:user redis/</span><br></pre></td></tr></table></figure>
+
+<p>然后在<code>redis</code>目录下，新建<code>bin</code>和<code>conf</code>目录。</p>
+<p>把前面编译后的redis的可执行文件（在<code>redis-6.2.6/src</code>下），复制到<code>/usr/local/redis/bin</code>里面去。</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">sudo cp redis* /usr/local/redis/bin/</span><br></pre></td></tr></table></figure>
+
+<h3 id="Master-Slave-搭建"><a href="#Master-Slave-搭建" class="headerlink" title="Master-Slave 搭建"></a>Master-Slave 搭建</h3><p>redis给我们提供了一个默认的配置文件<code>redis.conf</code>。把它复制到<code>/usr/local/redis/conf</code>目录下，并改名为<code>6379.conf</code>.</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">cp redis.conf  /usr/local/redis/conf/6379.conf</span><br></pre></td></tr></table></figure>
+
+<p>修改配置文件</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">vi 6379.conf</span><br></pre></td></tr></table></figure>
+
+<p>修改如下几个配置：</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">port 6379</span><br><span class="line"></span><br><span class="line">daemonize no 修改为 daemonize yes (以后台程序方式运行)</span><br><span class="line"></span><br><span class="line">pidfile /var/run/redis_6379.pid  改为 pidfile /usr/local/redis/redis_6379.pid(把pidfile生成到有权限的目录下)</span><br><span class="line"></span><br><span class="line">logfile /usr/local/redis/redis_6379.log</span><br></pre></td></tr></table></figure>
+
+<p>启动：</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">/usr/local/redis/bin/redis-server /usr/local/redis/conf/6379.conf</span><br></pre></td></tr></table></figure>
+
+<p>配置从节点：</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">cp 6379.conf 6380.conf</span><br><span class="line">cp 6379.conf 6381.conf</span><br></pre></td></tr></table></figure>
+
+<p>修改 <code>6380.conf</code>，修改对应端口和pid配置，然后加入<code>replicaof 127.0.0.1 6379</code></p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">port 6379 改为 port 6380</span><br><span class="line">pidfile /usr/local/redis/redis_6379.pid   改为 pidfile /usr/local/redis/redis_6380.conf</span><br><span class="line">logfile /usr/local/redis/redis_6380.log</span><br><span class="line">replicaof 127.0.0.1 6379</span><br></pre></td></tr></table></figure>
+
+<p>修改 <code>6381.conf</code>，修改对应端口和pid配置，然后加入<code>replicaof 127.0.0.1 6379</code></p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">port 6379 改为 port 6381</span><br><span class="line">pidfile /usr/local/redis/redis_6379.pid   改为 pidfile /usr/local/redis/redis_6381.conf</span><br><span class="line">logfile /usr/local/redis/redis_6381.log</span><br><span class="line">replicaof 127.0.0.1 6379</span><br></pre></td></tr></table></figure>
+
+<p>启动连个redis实例：</p>
+<figure class="highlight markdown"><table><tr><td class="code"><pre><span class="line">/usr/local/redis/bin/redis-server  /usr/local/redis/conf/6379.conf</span><br><span class="line">/usr/local/redis/bin/redis-server  /usr/local/redis/conf/6380.conf</span><br><span class="line">/usr/local/redis/bin/redis-server  /usr/local/redis/conf/6381.conf</span><br></pre></td></tr></table></figure>
+
+<p>使用 Redis 客户端连接到 6379 端口的 Redis 服务端，使用 <code>info replication</code> 查看主从状态</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">/usr/local/redis/bin/redis-cli -c -p 6379</span><br><span class="line"></span><br><span class="line">127.0.0.1:6379&gt; info replication</span><br><span class="line"># Replication</span><br><span class="line">role:master</span><br><span class="line">connected_slaves:2</span><br><span class="line">slave0:ip=127.0.0.1,port=6380,state=online,offset=154,lag=0</span><br><span class="line">slave1:ip=127.0.0.1,port=6381,state=online,offset=154,lag=0</span><br><span class="line">master_failover_state:no-failover</span><br><span class="line">master_replid:91e2c5ec2ab71d0f8531e8176cf5d197a9420544</span><br><span class="line">master_replid2:0000000000000000000000000000000000000000</span><br><span class="line">master_repl_offset:154</span><br><span class="line">second_repl_offset:-1</span><br><span class="line">repl_backlog_active:1</span><br><span class="line">repl_backlog_size:1048576</span><br><span class="line">repl_backlog_first_byte_offset:1</span><br><span class="line">repl_backlog_histlen:154</span><br></pre></td></tr></table></figure>
+
+<p>可以看到 6379 的 role 是 master,connected slave 有两个。</p>
+<p>设置一个 key 试试：</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">127.0.0.1:6379&gt; set test 111</span><br><span class="line">OK</span><br></pre></td></tr></table></figure>
+
+<p>使用 Redis 客户端连接到 6380 端口的 Redis 服务端，使用 <code>info replication</code> 查看主从状态</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">/usr/local/redis/bin/redis-cli -c -p 6380</span><br><span class="line"></span><br><span class="line">127.0.0.1:6380&gt; info replication</span><br><span class="line"># Replication</span><br><span class="line">role:slave</span><br><span class="line">master_host:127.0.0.1</span><br><span class="line">master_port:6379</span><br><span class="line">master_link_status:up</span><br><span class="line">master_last_io_seconds_ago:1</span><br><span class="line">master_sync_in_progress:0</span><br><span class="line">slave_read_repl_offset:631350</span><br><span class="line">slave_repl_offset:631350</span><br><span class="line">slave_priority:100</span><br><span class="line">slave_read_only:1</span><br><span class="line">replica_announced:1</span><br><span class="line">connected_slaves:0</span><br><span class="line">master_failover_state:no-failover</span><br><span class="line">master_replid:91e2c5ec2ab71d0f8531e8176cf5d197a9420544</span><br><span class="line">master_replid2:0000000000000000000000000000000000000000</span><br><span class="line">master_repl_offset:631350</span><br><span class="line">second_repl_offset:-1</span><br><span class="line">repl_backlog_active:1</span><br><span class="line">repl_backlog_size:1048576</span><br><span class="line">repl_backlog_first_byte_offset:1</span><br><span class="line">repl_backlog_histlen:631350</span><br></pre></td></tr></table></figure>
+
+<p>查看主服务器设置的 key:</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">127.0.0.1:6380&gt; get test</span><br><span class="line">&quot;111&quot;</span><br></pre></td></tr></table></figure>
+
+<p>可以看到从服务器已经同步可主服务器的数据库状态。</p>
+<h3 id="Sentinel-搭建"><a href="#Sentinel-搭建" class="headerlink" title="Sentinel 搭建"></a>Sentinel 搭建</h3><p>在 conf 目录下新建一个 <code>sentinel</code> 文件夹，并进入：</p>
+<p><code>mkdir sentinel &amp;&amp; cd sentinel</code></p>
+<p>Sentinel 配置如下所示：</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">port 26379</span><br><span class="line"># 是否后台运行</span><br><span class="line">daemonize yes</span><br><span class="line">pidfile /usr/local/redis/conf/sentinel/redis-sentinel-26379.pid</span><br><span class="line">logfile /usr/local/redis/conf/sentinel/redis-sentinel-26379.log</span><br><span class="line">dir &quot;./&quot;</span><br><span class="line">sentinel monitor mymaster 127.0.0.1 6379 2</span><br><span class="line">acllog-max-len 128</span><br></pre></td></tr></table></figure>
+
+<p>新建文件 <code>sentinel-26379.conf</code>,将上述配置 copy 到 <code>sentinel-26379.conf</code>。</p>
+<p>再增加两个 sentinel 节点配置：</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">cp sentinel-26379.conf sentinel-26380.conf</span><br><span class="line">cp sentinel-26379.conf sentinel-26381.conf</span><br></pre></td></tr></table></figure>
+
+<p>修改 <code>sentinel-26380.conf</code>:</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">port 26380</span><br><span class="line">pidfile /usr/local/redis/conf/sentinel/redis-sentinel-26380.pid</span><br><span class="line">logfile /usr/local/redis/conf/sentinel/redis-sentinel-26380.log</span><br></pre></td></tr></table></figure>
+
+<p>修改 <code>sentinel-26381.conf</code>:</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">port 26381</span><br><span class="line">pidfile /usr/local/redis/conf/sentinel/redis-sentinel-26381.pid</span><br><span class="line">logfile /usr/local/redis/conf/sentinel/redis-sentinel-26381.log</span><br></pre></td></tr></table></figure>
+
+<p>启动 Sentinel, 在 <code>bin</code> 目录执行如下命令:</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">➜  bin ./redis-sentinel ../conf/sentinel/sentinel-26379.conf</span><br><span class="line">➜  bin ./redis-sentinel ../conf/sentinel/sentinel-26380.conf</span><br><span class="line">➜  bin ./redis-sentinel ../conf/sentinel/sentinel-26381.conf</span><br></pre></td></tr></table></figure>
+
+<p>使用 <code>ps -ef | grep redis | grep -v grep</code> 查看 redis 进程</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">ps -ef | grep redis | grep -v grep</span><br><span class="line">501 69696     1   0 10:27PM ??         0:07.13 ./redis-server 127.0.0.1:6379</span><br><span class="line">501 69733     1   0 10:28PM ??         0:06.90 ./redis-server 127.0.0.1:6380</span><br><span class="line">501 69745     1   0 10:28PM ??         0:06.83 ./redis-server 127.0.0.1:6381</span><br><span class="line">501 69946     1   0 10:32PM ??         0:08.37 ./redis-sentinel *:26379 [sentinel]</span><br><span class="line">501 69956     1   0 10:32PM ??         0:08.34 ./redis-sentinel *:26380 [sentinel]</span><br><span class="line">501 69962     1   0 10:32PM ??         0:08.30 ./redis-sentinel *:26381 [sentinel]</span><br></pre></td></tr></table></figure>
+
+<p>测试 Sentinel,我们将端口为 6379 的 Redis kill 掉， <code>kill -9 69696</code>,这时我们查看 6380 和 6381 两台 Redis 服务器的状态：</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">➜  bin ./redis-cli -c -p 6380</span><br><span class="line"></span><br><span class="line">127.0.0.1:6380&gt; info replication</span><br><span class="line"># Replication</span><br><span class="line">role:slave</span><br><span class="line">master_host:127.0.0.1</span><br><span class="line">master_port:6379</span><br><span class="line">master_link_status:down</span><br><span class="line">master_last_io_seconds_ago:-1</span><br><span class="line">master_sync_in_progress:0</span><br><span class="line">slave_read_repl_offset:864009</span><br><span class="line">slave_repl_offset:864009</span><br><span class="line">master_link_down_since_seconds:18</span><br><span class="line">slave_priority:100</span><br><span class="line">slave_read_only:1</span><br><span class="line">replica_announced:1</span><br><span class="line">connected_slaves:0</span><br><span class="line">master_failover_state:no-failover</span><br><span class="line">master_replid:91e2c5ec2ab71d0f8531e8176cf5d197a9420544</span><br><span class="line">master_replid2:0000000000000000000000000000000000000000</span><br><span class="line">master_repl_offset:864009</span><br><span class="line">second_repl_offset:-1</span><br><span class="line">repl_backlog_active:1</span><br><span class="line">repl_backlog_size:1048576</span><br><span class="line">repl_backlog_first_byte_offset:1</span><br><span class="line">repl_backlog_histlen:864009</span><br></pre></td></tr></table></figure>
+
+<p>我们可以看到 <code>master_link_status:down</code>。过一分钟左右，我们再次查看 6380 的状态：</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">➜  bin ./redis-cli -c -p 6380</span><br><span class="line"></span><br><span class="line">127.0.0.1:6380&gt; info replication</span><br><span class="line"># Replication</span><br><span class="line">role:master</span><br><span class="line">connected_slaves:1</span><br><span class="line">slave0:ip=127.0.0.1,port=6381,state=online,offset=871802,lag=0</span><br><span class="line">master_failover_state:no-failover</span><br><span class="line">master_replid:e280894e989aab690fbb112da0735016c992bbed</span><br><span class="line">master_replid2:91e2c5ec2ab71d0f8531e8176cf5d197a9420544</span><br><span class="line">master_repl_offset:871935</span><br><span class="line">second_repl_offset:864010</span><br><span class="line">repl_backlog_active:1</span><br><span class="line">repl_backlog_size:1048576</span><br><span class="line">repl_backlog_first_byte_offset:1</span><br><span class="line">repl_backlog_histlen:871935</span><br></pre></td></tr></table></figure>
+
+<p>我们可以看到 6380 已经成为了新的 master。这是我们再将 6379 启动，并使用 Redis 客户端连接到 6379,可以看到 6379 已经成为了 6380 的 salve。</p>
+<figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">➜  bin ./redis-server ../conf/redis-6379.conf</span><br><span class="line"></span><br><span class="line">➜  bin ./redis-cli -c -p 6379</span><br><span class="line">127.0.0.1:6379&gt; info replication</span><br><span class="line"># Replication</span><br><span class="line">role:slave</span><br><span class="line">master_host:127.0.0.1</span><br><span class="line">master_port:6380</span><br><span class="line">master_link_status:up</span><br><span class="line">master_last_io_seconds_ago:1</span><br><span class="line">master_sync_in_progress:0</span><br><span class="line">slave_read_repl_offset:942938</span><br><span class="line">slave_repl_offset:942938</span><br><span class="line">slave_priority:100</span><br><span class="line">slave_read_only:1</span><br><span class="line">replica_announced:1</span><br><span class="line">connected_slaves:0</span><br><span class="line">master_failover_state:no-failover</span><br><span class="line">master_replid:e280894e989aab690fbb112da0735016c992bbed</span><br><span class="line">master_replid2:0000000000000000000000000000000000000000</span><br><span class="line">master_repl_offset:942938</span><br><span class="line">second_repl_offset:-1</span><br><span class="line">repl_backlog_active:1</span><br><span class="line">repl_backlog_size:1048576</span><br><span class="line">repl_backlog_first_byte_offset:941586</span><br><span class="line">repl_backlog_histlen:1353</span><br><span class="line"></span><br><span class="line">➜  bin ./redis-cli -c -p 6380</span><br><span class="line">127.0.0.1:6380&gt; info replication</span><br><span class="line"># Replication</span><br><span class="line">role:master</span><br><span class="line">connected_slaves:2</span><br><span class="line">slave0:ip=127.0.0.1,port=6381,state=online,offset=961152,lag=0</span><br><span class="line">slave1:ip=127.0.0.1,port=6379,state=online,offset=961152,lag=1</span><br><span class="line">master_failover_state:no-failover</span><br><span class="line">master_replid:e280894e989aab690fbb112da0735016c992bbed</span><br><span class="line">master_replid2:91e2c5ec2ab71d0f8531e8176cf5d197a9420544</span><br><span class="line">master_repl_offset:961152</span><br><span class="line">second_repl_offset:864010</span><br><span class="line">repl_backlog_active:1</span><br><span class="line">repl_backlog_size:1048576</span><br><span class="line">repl_backlog_first_byte_offset:1</span><br><span class="line">repl_backlog_histlen:961152</span><br></pre></td></tr></table></figure>
+]]></content>
+      <categories>
+        <category>tech</category>
+      </categories>
+      <tags>
+        <tag>Redis,Redis Master-Slave,Redis Sentinel</tag>
+      </tags>
+  </entry>
+  <entry>
+    <title>Introduce CDN</title>
+    <url>/2021/11/10/introduce-cdn/</url>
+    <content><![CDATA[<p>CDN(Content Delivery Network) 是一个全球性的分布式网络服务，它从靠近用户的位置提供内容。通常，HTML/CSS/JS，图片和视频等静态内容由 CDN 提供。CDN 的 DNS 解析会告知客户端连接哪台服务器。</p>
+<p>将内容存储在 CDN 上，可以从两个方面来提高性能：</p>
+<ul>
+<li>从靠近用户的数据中心提供资源</li>
+<li>你的服务器不必为CDN所满足的请求提供服务</li>
+</ul>
+<span id="more"></span>
+
+<h4 id="push-CDNs"><a href="#push-CDNs" class="headerlink" title="push CDNs"></a>push CDNs</h4><p>只要你的服务器发生变化，Push CDN 就会收到新的内容。你负责提供内容、直接上传到CDN和重写URL以指向CDN。你可以配置内容何时过期和何时更新。内容只有在新增或改变的时候才会被推送，最大限度地减少流量，但最大限度地提高存储。</p>
+<h4 id="pull-CDNs"><a href="#pull-CDNs" class="headerlink" title="pull CDNs"></a>pull CDNs</h4><p>Pull CDN 在第一个用户请求内容时从服务器上抓取新内容。这将会导致第一个请求变慢，但是当第二次访问该资源时，CDN 上已经缓存了该资源，就可以直接返回。</p>
+<p>TTL(Time To Live) 决定一个指定资源的存活时间，单位是秒。</p>
+<h4 id="Pull-CDNs-的优点"><a href="#Pull-CDNs-的优点" class="headerlink" title="Pull CDNs 的优点"></a>Pull CDNs 的优点</h4><p>一般来说，Pull CDN 比 Push CDN 更容易配置。一旦最初配置好，Pull CDN就会根据要求在其服务器上无缝存储和更新内容。如果CDN没有检测到文件被修改，数据通常会在那里停留24小时或更长时间。对于低流量的网站或那些通过缓存、良好的代码等进行了充分优化的网站，Pull CDN 提供了加速，而不会对你的服务器提出太多的要求。一旦你的内容被pull 了，所需的维护是低的。</p>
+<h4 id="Push-CDNs-的缺点"><a href="#Push-CDNs-的缺点" class="headerlink" title="Push CDNs 的缺点"></a>Push CDNs 的缺点</h4><p>Push CDN 会增加服务器的负担（因为需要推送内容到 CDN）。或者你在一天内有很多变化的内容，Push CDN 会给你的服务器带来额外的压力。如果你的服务器有很大的负载，或者每天有几次新的内容，所有这些内容在你的服务器和CDN之间同步可能是弊大于利。</p>
+<h4 id="如何选择"><a href="#如何选择" class="headerlink" title="如何选择"></a>如何选择</h4><p>决定使用哪种CDN类型，在很大程度上是围绕着流量和下载量。</p>
+<p>托管视频和播客（又称大型下载）的旅游博客会发现，从长远来看，Push CDN 更便宜、更有效，因为CDN不会重新下载内容，直到你主动将其推到CDN。</p>
+<p>Pull CDN 可以帮助高流量的小型下载网站，在CDN服务器上保留最受欢迎的内容。内容的后续更新（或 “Pull”）并不频繁，不足以使成本上升到 Push CDN 的水平。换而言之，高流量站点使用 Pull CDN 效果不错，因为只有最近请求的内容保存在 CDN 中，流量才能更平衡地分散。</p>
+<p>参考文献：<br><a href="http://www.travelblogadvice.com/technical/the-differences-between-push-and-pull-cdns/">The Differences Between Push And Pull CDNs</a></p>
+]]></content>
+      <categories>
+        <category>tech</category>
+      </categories>
+      <tags>
+        <tag>CDN</tag>
+      </tags>
+  </entry>
+  <entry>
+    <title>Introduce DNS</title>
+    <url>/2021/11/02/introduce-dns/</url>
+    <content><![CDATA[<h3 id="什么是-DNS"><a href="#什么是-DNS" class="headerlink" title="什么是 DNS?"></a>什么是 DNS?</h3><p>生活中，人们通过例如 google.com 等域名来访问信息。但是 Web 浏览器是通过 IP 地址进行交互的。DNS(Domain Name System) 是一个将域名和IP地址相互映射的分布式数据库，能够使人更方便地访问互联网。DNS使用TCP和UDP端口 53。</p>
+<span id="more"></span>
+
+<h3 id="历史"><a href="#历史" class="headerlink" title="历史"></a>历史</h3><p>DNS 起源于互联网的早期，当时互联网是美国国防部为研究目的建立的一个小网络。该网络中计算机的主机名是通过使用位于集中管理的服务器上的单个HOSTS文件进行管理的。需要解决网络主机名的每个站点都下载了此文件。随着互联网上主机数量的增加，更新过程产生的流量以及HOSTS文件的大小也增加了。对新系统的需求变得越来越明显，该系统将提供可伸缩性、分散管理、支持各种数据类型等功能。</p>
+<p>1984年引入的 DNS 成为这个新系统。使用 DNS，主机名存在一个数据库中，该数据库可以分布在多台服务器之间，减少了任何一台服务器的负载，并提供了按分区管理此命名系统的能力。DNS支持分层名称，除了HOSTS文件中使用的主机名称到IP地址映射外，还允许注册各种数据类型。由于DNS数据库是分布式的，因此当添加更多服务器时，其潜在大小是无限的，性能不会下降。</p>
+<p>最初的 DNS 基于 Request for Comment (RFC) 882 (Domain Names: Concepts and Facilities) 和 RFC 883 (Domain Names–Implementation and Specification)，随后被 RFC 1034 (Domain Names–Concepts and Facilities), and RFC 1035 (Domain Names–Implementation and Specification) 所取代。</p>
+<p>DNS的实现——Berkeley Internet Name Domain（BIND）——最初是为4.3 BSD UNIX操作系统开发的。大多数 DNS 实现都基于 RFC 1034 和 RFC 1035。</p>
+<p>早期的域名必须以英文句号 . 结尾。例如，当用户访问HTTP服务时必须在地址栏中输入：<code>http://www.wikipedia.org.</code>，这样DNS才能够进行域名解析。如今DNS服务器已经可以自动补上结尾的句号。</p>
+<h3 id="DNS-domain-namespace"><a href="#DNS-domain-namespace" class="headerlink" title="DNS domain namespace"></a>DNS domain namespace</h3><p>域名系统作为一个分层和分布式数据库实现，包含各种类型的数据，包括主机名和域名。DNS数据库中的名称形成一个名为域名空间的分层树结构。域名由用点分隔的单个标签组成，例如：mydomain.microsoft.com。这个域名有三个标签，分别是 mydomain, microsoft, com。</p>
+<p>完全限定域名（FQDN,fully qualify domain name）通过指定从引用主机到根的路径中用点分隔的名称列表，唯一标识主机在DNS层次树中的位置。下图显示了Microsoft.com.域中具有名为mydomain的主机的DNS树示例。主机的FQDN将是 mydomain.microsoft.com。</p>
+<p><img data-src="https://docs.microsoft.com/en-us/previous-versions/windows/it-pro/windows-server-2008-R2-and-2008/images/dd197427.b806a082-8b59-44cd-87cc-eaaffceef548(ws.10).gif" alt="dns-name-spaces"></p>
+<p>从技术上讲，树中使用的任何DNS域名都是一个域名。然而，大多数DNS讨论都根据名称的级别和常用方式，以五种方式之一识别名称。例如，注册到微软（microsoft.com.）的DNS域名被称为二级域名。这是因为名称有两个部分（称为标签），表明它位于树根或树顶部下方的两个级别。大多数DNS域名有两个或多个标签，每个标签都表示树中的新级别。句点用于名称来分隔标签。</p>
+<p>下表描述了用于通过名称空间中的函数描述DNS域名的五个类别，以及每种名称类型的示例。</p>
+<h4 id="DNS-域名类型"><a href="#DNS-域名类型" class="headerlink" title="DNS 域名类型"></a>DNS 域名类型</h4><table>
+<thead>
+<tr>
+<th align="left">名称类型</th>
+<th align="left">描述</th>
+<th align="left">示例</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="left">root 域(根域)</td>
+<td align="left">这是树的顶部，表示一个未命名的级别；它有时显示为两个空引号（“”），表示空值。在DNS域名中使用时，它由尾随句点（.）声明，以指定名称位于域层次结构的根或最高层。在这种情况下，DNS域名被视为完整，并指向名称树中的确切位置。以这种方式声明的名称是FQDN。</td>
+<td align="left">单个句点（.）或名称末尾使用的句号，如“example.microsoft.com.”。</td>
+</tr>
+<tr>
+<td align="left">顶级域名</td>
+<td align="left">用于指示使用名称的国家/区域或组织类型的名称。</td>
+<td align="left">“.com”，表示在互联网上注册用于商业用途的企业的名称。</td>
+</tr>
+<tr>
+<td align="left">二级域名</td>
+<td align="left">向个人或组织注册以便在互联网上使用的可变长度名称。这些名称始终基于适当的顶级域，具体取决于使用名称的组织类型或地理位置。</td>
+<td align="left">“microsoft.com.”是互联网DNS域名注册商在微软注册的二级域名。</td>
+</tr>
+<tr>
+<td align="left">子域</td>
+<td align="left">组织可以创建的从注册的二级域名派生的其他名称。这些包括添加名称，以在组织中增加DNS名称树，并将其划分为部门或地理位置</td>
+<td align="left">“example.microsoft.com.”，这是微软分配给文档示例名称的虚拟子域。</td>
+</tr>
+<tr>
+<td align="left">主机或资源名称</td>
+<td align="left">在DNS名称树中表示叶子并识别特定资源的名称。通常，DNS域名的最左边标签标识网络上的特定计算机。例如，如果主机（A）资源记录中使用了此级别的名称，则该名称用于根据主机名称查找计算机的IP地址。</td>
+<td align="left">“host-a.example.microsoft.com.”，其中第一个标签（“host-a”）是网络上特定计算机的DNS主机名。</td>
+</tr>
+</tbody></table>
+<h4 id="DNS和互联网域"><a href="#DNS和互联网域" class="headerlink" title="DNS和互联网域"></a>DNS和互联网域</h4><p>互联网域名系统由互联网上的域名注册机构管理，负责维护按组织和国家/地区分配的顶级域名。这些域名遵循国际标准3166。下表显示了许多保留给各组织使用的现有缩写，以及用于国家/地区的两字母和三字母缩写：</p>
+<p>一些DNS顶级域名（TLD）</p>
+<table>
+<thead>
+<tr>
+<th align="left">DNS域名</th>
+<th align="left">组织类型</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="left">com</td>
+<td align="left">商业组织</td>
+</tr>
+<tr>
+<td align="left">edu</td>
+<td align="left">教育机构</td>
+</tr>
+<tr>
+<td align="left">org</td>
+<td align="left">非营利组织</td>
+</tr>
+<tr>
+<td align="left">net</td>
+<td align="left">网络</td>
+</tr>
+<tr>
+<td align="left">gov</td>
+<td align="left">非军事政府组织</td>
+</tr>
+<tr>
+<td align="left">mil</td>
+<td align="left">军政府组织</td>
+</tr>
+<tr>
+<td align="left">arpa</td>
+<td align="left">反向DNS</td>
+</tr>
+<tr>
+<td align="left">“xx”</td>
+<td align="left">双字母国家代码（例如，cn,us,au,ca,fr）</td>
+</tr>
+</tbody></table>
+<h4 id="Resource-Record"><a href="#Resource-Record" class="headerlink" title="Resource Record"></a>Resource Record</h4><p>DNS数据库由资源记录（RR）组成。每个RR都标识数据库中的特定资源。DNS中有各种类型的RR。常见的 DNS RR 记录类型如下：</p>
+<ul>
+<li>A：地址记录（A 即 Address 的首字母），返回域名指向的IP地址。</li>
+<li>NS：域名服务器记录（Name Server），返回保存下一级域名信息的服务器地址。该记录只能设置为域名，不能设置为IP地址。</li>
+<li>MX：邮件记录（Mail eXchange），返回接收电子邮件的服务器地址。</li>
+<li>CNAME：规范名称记录（Canonical Name），返回另一个域名，即当前查询的域名是另一个域名的跳转</li>
+<li>PTR：逆向查询记录（Pointer Record），只用于从IP地址查询域名</li>
+</ul>
+<h3 id="DNS-查询"><a href="#DNS-查询" class="headerlink" title="DNS 查询"></a>DNS 查询</h3><p>通常，DNS 查找信息将本地缓存在查询计算机内，或者远程缓存在 DNS 基础设施内。DNS 查找通常有 8 个步骤。缓存 DNS 信息时，将从 DNS 查找过程中跳过一些步骤，从而使该过程更快。以下示例概述了不缓存任何内容时的所有 8 个步骤。</p>
+<ol>
+<li>用户在 Web 浏览器中键入 “example.com”，查询传输到 Internet 中，并被 DNS 递归解析器接收。</li>
+<li>接着，解析器查询 DNS 根域名服务器（.）。</li>
+<li>然后，根服务器使用存储其域信息的顶级域（TLD）DNS 服务器（例如 .com 或 .net）的地址响应该解析器。在搜索 example.com 时，我们的请求指向 .com TLD。</li>
+<li>然后，解析器向 .com TLD 发出请求。</li>
+<li>TLD 服务器随后使用该域的域名服务器 example.com 的 IP 地址进行响应。</li>
+<li>最后，递归解析器将查询发送到域的域名服务器。</li>
+<li>example.com 的 IP 地址而后从域名服务器返回解析器。</li>
+<li>然后 DNS 解析器使用最初请求的域的 IP 地址响应 Web 浏览器。</li>
+</ol>
+<p>DNS 查找的这 8 个步骤返回 example.com 的 IP 地址后，浏览器便能发出对该网页的请求：</p>
+<ol start="9">
+<li>浏览器向该 IP 地址发出 HTTP 请求。</li>
+<li>位于该 IP 的服务器返回将在浏览器中呈现的网页（第 10 步）。</li>
+</ol>
+<p><img data-src="https://www.cloudflare.com/img/learning/dns/what-is-dns/dns-lookup-diagram.png" alt="dns-lookup"></p>
+<h3 id="DNS-查询有哪些类型？"><a href="#DNS-查询有哪些类型？" class="headerlink" title="DNS 查询有哪些类型？"></a>DNS 查询有哪些类型？</h3><p>典型 DNS 查找中会出现三种类型的查询。通过组合使用这些查询，优化的 DNS 解析过程可缩短传输距离。在理想情况下，可以使用缓存的记录数据，从而使 DNS 域名服务器能够返回非递归查询。</p>
+<p>3 种 DNS 查询类型：</p>
+<p>递归查询 - 在递归查询中，DNS 客户端要求 DNS 服务器（一般为 DNS 递归解析器）将使用所请求的资源记录响应客户端，或者如果解析器无法找到该记录，则返回错误消息。</p>
+<p>迭代查询 - 在这种情况下，DNS 客户端将允许 DNS 服务器返回其能够给出的最佳应答。如果所查询的 DNS 服务器与查询名称不匹配，则其将返回对较低级别域名空间具有权威性的 DNS 服务器的引用。然后，DNS 客户端将对引用地址进行查询。此过程继续使用查询链中的其他 DNS 服务器，直至发生错误或超时为止。</p>
+<p>非递归查询 - 当 DNS 解析器客户端查询 DNS 服务器以获取其有权访问的记录时通常会进行此查询，因为其对该记录具有权威性，或者该记录存在于其缓存内。DNS 服务器通常会缓存 DNS 记录，以防止更多带宽消耗和上游服务器上的负载。</p>
+<h3 id="什么是-DNS-高速缓存？DNS-高速缓存发生在哪里？"><a href="#什么是-DNS-高速缓存？DNS-高速缓存发生在哪里？" class="headerlink" title="什么是 DNS 高速缓存？DNS 高速缓存发生在哪里？"></a>什么是 DNS 高速缓存？DNS 高速缓存发生在哪里？</h3><p>缓存的目的是将数据临时存储在某个位置，从而提高数据请求的性能和可靠性。DNS 高速缓存涉及将数据存储在更靠近请求客户端的位置，以便能够更早地解析 DNS 查询，并且能够避免在 DNS 查找链中进一步向下的额外查询，从而缩短加载时间并减少带宽/CPU 消耗。DNS 数据可缓存到各种不同的位置上，每个位置均将存储 DNS 记录并保存由生存时间（TTL）决定的一段时间。</p>
+<p>浏览器 DNS 缓存</p>
+<p>现代 Web 浏览器设计为默认将 DNS 记录缓存一段时间。目的很明显；越靠近 Web 浏览器进行 DNS 缓存，为检查缓存并向 IP 地址发出正确请求而必须采取的处理步骤就越少。发出对 DNS 记录的请求时，浏览器缓存是针对所请求的记录而检查的第一个位置。</p>
+<p>在 Chrome 浏览器中，您可以转到 chrome://net-internals/#dns 查看 DNS 缓存的状态。</p>
+<p>操作系统（OS）级 DNS 缓存</p>
+<p>操作系统级 DNS 解析器是 DNS 查询离开您计算机前的第二站，也是本地最后一站。操作系统内旨在处理此查询的过程通常称为“存根解析器”或 DNS 客户端。当存根解析器获取来自某个应用程序的请求时，其首先检查自己的缓存，以便查看是否有此记录。如果没有，则将本地网络外部的 DNS 查询（设置了递归标记）发送到 Internet 服务提供商（ISP）内部的 DNS 递归解析器。</p>
+<p>与先前所有步骤一样，当 ISP 内的递归解析器收到 DNS 查询时，其还将查看所请求的主机到 IP 地址转换是否已经存储在其本地持久性层中。</p>
+<p>根据其缓存中具有的记录类型，递归解析器还具有其他功能：</p>
+<ol>
+<li><p>如果解析器没有 A 记录，但确实有针对权威性域名服务器的 NS 记录，则其将直接查询这些域名服务器，从而绕过 DNS 查询中的几个步骤。此快捷方式可防止从根和 .com 域名服务器（在我们对 example.com 的搜索中）进行查找，并且有助于更快地解析 DNS 查询。</p>
+</li>
+<li><p>如果解析器没有 NS 记录，它会向 TLD 服务器（本例中为 .com）发送查询，从而跳过根服务器。</p>
+</li>
+<li><p>万一解析器没有指向 TLD 服务器的记录，其将查询根服务器。这种情况通常在清除了 DNS 高速缓存后发生。</p>
+</li>
+</ol>
+<h3 id="DNS-Load-Balancing"><a href="#DNS-Load-Balancing" class="headerlink" title="DNS Load Balancing"></a>DNS Load Balancing</h3><p>DNS负载平衡取决于大多数客户端使用他们收到的域名的第一个IP地址这一事实。在大多数Linux发行版中，默认情况下，DNS每次响应新客户端时都会使用 Round robin 方式以不同的顺序发送IP地址列表。因此，不同的客户端将请求定向到不同的服务器，有效地在整个服务器组中分配负载。</p>
+<p>不幸的是，DNS负载平衡的简单实现存在固有的问题，限制了其可靠性和效率。最重要的是，DNS不会检查服务器或网络中断或错误，因此即使服务器停机或无法访问，DNS也始终为域返回相同的IP地址集。</p>
+<h4 id="Round-robin"><a href="#Round-robin" class="headerlink" title="Round-robin"></a>Round-robin</h4><figure class="highlight plaintext"><table><tr><td class="code"><pre><span class="line">www IN A 64.131.79.131</span><br><span class="line">www IN A 64.131.79.132</span><br><span class="line">www IN A 64.131.79.133</span><br><span class="line">www IN A 64.131.79.134</span><br></pre></td></tr></table></figure>
+
+<h4 id="Weighted-Round-robin"><a href="#Weighted-Round-robin" class="headerlink" title="Weighted Round robin"></a>Weighted Round robin</h4><p>加权 Round robin 提供了一种在可用资源之间公平分配负载的方式。在加权 Round robin 算法中，每个目标（此处为服务器）分配了一个值，该值与池中的其他服务器相比，该值表示该服务器的性能。与池中的其他服务器相比，此“权重”决定了该服务器以多（或更少）的请求发送了多少请求。</p>
+<p>假设您有三台服务器经过单独基准测试和配置，这些服务器将部署在加权 Round robin 环境中。The<br>第一可以处理100个要求/秒，第二个可以处理300个要求/秒，最后一个只能处理25个要求/秒（平均而言，使用自动基准服务进行测试）<br>相同的数据）。通常，由于服务器性能存在如此差异，第三个将完全排除在设置之外。但在加权循环中，每台服务器都可以在循环配置脚本/文件中尽可能多地分配：</p>
+<p>资源权重<br>——————<br>server1.fqdn 4<br>server2.fqdn 12<br>server3.fqdn 1</p>
+<p>很明显，接下来会发生什么：每12个请求将发送到服务器2，4个将发送到服务器1个，只有1个将发送到服务器3。结果是负载分布更加均匀，即使不那么相等。</p>
+<p>用途：</p>
+<ol>
+<li>prevent traffic from going to servers under maintenance</li>
+<li>balance between varying cluster sizes</li>
+<li>A/B testing</li>
+</ol>
+<h4 id="Latency-based"><a href="#Latency-based" class="headerlink" title="Latency-based"></a>Latency-based</h4><p>加权 Round robin 考虑了服务器的资源与负载来分配请求，但是没有考虑网络。</p>
+<h4 id="Geolocation-based"><a href="#Geolocation-based" class="headerlink" title="Geolocation-based"></a>Geolocation-based</h4><p>基于地理位置</p>
+<p>参考:</p>
+<p><a href="https://www.cloudflare.com/zh-cn/learning/dns/what-is-dns/">what is dns</a></p>
+<p><a href="https://docs.microsoft.com/en-us/previous-versions/windows/it-pro/windows-server-2008-R2-and-2008/dd197427(v=ws.10)?redirectedfrom=MSDN">dns</a></p>
+<p><a href="https://www.nginx.com/resources/glossary/dns-load-balancing/">dns balancing</a></p>
+]]></content>
+      <categories>
+        <category>tech</category>
+      </categories>
+      <tags>
+        <tag>DNS</tag>
+      </tags>
+  </entry>
+  <entry>
+    <title>Introduce to Load balancer</title>
+    <url>/2021/12/07/introduce-load-balancer/</url>
+    <content><![CDATA[]]></content>
+      <categories>
+        <category>tech</category>
+      </categories>
+      <tags>
+        <tag>Load balancer]</tag>
+      </tags>
+  </entry>
+  <entry>
+    <title>Introduce to Load balancer</title>
+    <url>/2021/11/11/introduce-to-Load-balancer/</url>
+    <content><![CDATA[]]></content>
+      <categories>
+        <category>tech</category>
+      </categories>
+      <tags>
+        <tag>Load-balancer</tag>
+      </tags>
+  </entry>
+</search>

@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width">
+<meta name="theme-color" content="#222">
+<meta name="generator" content="Hexo 5.4.0">
+
+
+  <link rel="apple-touch-icon" sizes="180x180" href="/images/apple-touch-icon-next.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/images/favicon-32x32-next.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/images/favicon-16x16-next.png">
+  <link rel="mask-icon" href="/images/logo.svg" color="#222">
+
+<link rel="stylesheet" href="/css/main.css">
+
+
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@5.15.3/css/all.min.css" integrity="sha256-2H3fkXt6FEmrReK448mDVGKb3WW2ZZw35gI7vqHOE4Y=" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/animate.css@3.1.1/animate.min.css" integrity="sha256-PR7ttpcvz8qrF57fur/yAx1qXMFJeJFiA6pSzWi0OIE=" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fancyapps/fancybox@3.5.7/dist/jquery.fancybox.min.css" integrity="sha256-Vzbj7sDDS/woiFS3uNKo8eIuni59rjyNGtXfstRzStA=" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/nprogress@0.2.0/nprogress.css" integrity="sha256-no0c5ccDODBwp+9hSmV5VvPpKwHCpbVzXHexIkupM6U=" crossorigin="anonymous">
+  <script src="https://cdn.jsdelivr.net/npm/nprogress@0.2.0/nprogress.js" integrity="sha256-a5YRB27CcBwBFcT5EF/f3E4vzIqyHrSR878nseNYw64=" crossorigin="anonymous"></script>
+
+<script class="next-config" data-name="main" type="application/json">{"hostname":"example.com","root":"/","images":"/images","scheme":"Gemini","version":"8.7.0","exturl":false,"sidebar":{"position":"left","display":"post","padding":18,"offset":12},"copycode":true,"bookmark":{"enable":false,"color":"#222","save":"auto"},"fancybox":true,"mediumzoom":true,"lazyload":true,"pangu":false,"comments":{"style":"tabs","active":null,"storage":true,"lazyload":false,"nav":null},"motion":{"enable":true,"async":false,"transition":{"post_block":"fadeIn","post_header":"fadeInDown","post_body":"fadeInDown","coll_header":"fadeInLeft","sidebar":"fadeInUp"}},"prism":false,"i18n":{"placeholder":"Searching...","empty":"We didn't find any results for the search: ${query}","hits_time":"${hits} results found in ${time} ms","hits":"${hits} results found"},"path":"/search.xml","localsearch":{"enable":true,"trigger":"auto","top_n_per_article":1,"unescape":false,"preload":false}}</script><script src="/js/config.js"></script>
+<meta name="description" content="当公司业务发展，数据量增加到一定程度后，我们总是绕不开分布式这个话题。这个问题牵扯很多方面，  分区策略（Sharding）  数据备份：数据备份什么时候做？粒度是什么？怎样备份？  分区再平衡：当数据分布发生拓扑变化的时候，怎么把数据从原来的节点迁移到新的节点上？  集群管理：如何管理整个集群，如何把用户请求定向到某个特定的节点上？   这些问题很很多不同的解法，比如分片策略，不同的数据库可能选">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Redis Cluster">
+<meta property="og:url" content="http://example.com/2021/12/07/Redis-Cluster/index.html">
+<meta property="og:site_name" content="HeyMoon&#39;s cyber log">
+<meta property="og:description" content="当公司业务发展，数据量增加到一定程度后，我们总是绕不开分布式这个话题。这个问题牵扯很多方面，  分区策略（Sharding）  数据备份：数据备份什么时候做？粒度是什么？怎样备份？  分区再平衡：当数据分布发生拓扑变化的时候，怎么把数据从原来的节点迁移到新的节点上？  集群管理：如何管理整个集群，如何把用户请求定向到某个特定的节点上？   这些问题很很多不同的解法，比如分片策略，不同的数据库可能选">
+<meta property="og:locale">
+<meta property="article:published_time" content="2021-12-07T14:23:10.000Z">
+<meta property="article:modified_time" content="2021-12-07T14:29:52.488Z">
+<meta property="article:author" content="Hey Moon">
+<meta name="twitter:card" content="summary">
+
+
+<link rel="canonical" href="http://example.com/2021/12/07/Redis-Cluster/">
+
+
+
+<script class="next-config" data-name="page" type="application/json">{"sidebar":"","isHome":false,"isPost":true,"lang":"zh","comments":true,"permalink":"http://example.com/2021/12/07/Redis-Cluster/","path":"2021/12/07/Redis-Cluster/","title":"Redis Cluster"}</script>
+
+<script class="next-config" data-name="calendar" type="application/json">""</script>
+<title>Redis Cluster | HeyMoon's cyber log</title>
+  
+
+
+
+
+  <noscript>
+    <link rel="stylesheet" href="/css/noscript.css">
+  </noscript>
+</head>
+
+<body itemscope itemtype="http://schema.org/WebPage" class="use-motion">
+  <div class="headband"></div>
+
+  <main class="main">
+    <header class="header" itemscope itemtype="http://schema.org/WPHeader">
+      <div class="header-inner"><div class="site-brand-container">
+  <div class="site-nav-toggle">
+    <div class="toggle" aria-label="Toggle navigation bar" role="button">
+        <span class="toggle-line"></span>
+        <span class="toggle-line"></span>
+        <span class="toggle-line"></span>
+    </div>
+  </div>
+
+  <div class="site-meta">
+
+    <a href="/" class="brand" rel="start">
+      <i class="logo-line"></i>
+      <h1 class="site-title">HeyMoon's cyber log</h1>
+      <i class="logo-line"></i>
+    </a>
+  </div>
+
+  <div class="site-nav-right">
+    <div class="toggle popup-trigger">
+        <i class="fa fa-search fa-fw fa-lg"></i>
+    </div>
+  </div>
+</div>
+
+
+
+<nav class="site-nav">
+  <ul class="main-menu menu">
+        <li class="menu-item menu-item-home"><a href="/" rel="section"><i class="fa fa-home fa-fw"></i>Home</a></li>
+        <li class="menu-item menu-item-tags"><a href="/tags/" rel="section"><i class="fa fa-tags fa-fw"></i>Tags<span class="badge">5</span></a></li>
+        <li class="menu-item menu-item-categories"><a href="/categories/" rel="section"><i class="fa fa-th fa-fw"></i>Categories<span class="badge">1</span></a></li>
+        <li class="menu-item menu-item-archives"><a href="/archives/" rel="section"><i class="fa fa-archive fa-fw"></i>Archives<span class="badge">6</span></a></li>
+      <li class="menu-item menu-item-search">
+        <a role="button" class="popup-trigger"><i class="fa fa-search fa-fw"></i>Search
+        </a>
+      </li>
+  </ul>
+</nav>
+
+
+
+  <div class="search-pop-overlay">
+    <div class="popup search-popup"><div class="search-header">
+  <span class="search-icon">
+    <i class="fa fa-search"></i>
+  </span>
+  <div class="search-input-container">
+    <input autocomplete="off" autocapitalize="off" maxlength="80"
+           placeholder="Searching..." spellcheck="false"
+           type="search" class="search-input">
+  </div>
+  <span class="popup-btn-close" role="button">
+    <i class="fa fa-times-circle"></i>
+  </span>
+</div>
+<div class="search-result-container no-result">
+  <div class="search-result-icon">
+    <i class="fa fa-spinner fa-pulse fa-5x"></i>
+  </div>
+</div>
+
+    </div>
+  </div>
+
+</div>
+        
+  
+  <div class="toggle sidebar-toggle" role="button">
+    <span class="toggle-line"></span>
+    <span class="toggle-line"></span>
+    <span class="toggle-line"></span>
+  </div>
+
+  <aside class="sidebar">
+
+    <div class="sidebar-inner sidebar-nav-active sidebar-toc-active">
+      <ul class="sidebar-nav">
+        <li class="sidebar-nav-toc">
+          Table of Contents
+        </li>
+        <li class="sidebar-nav-overview">
+          Overview
+        </li>
+      </ul>
+
+      <div class="sidebar-panel-container">
+        <!--noindex-->
+        <div class="post-toc-wrap sidebar-panel">
+            <div class="post-toc animated"><ol class="nav"><li class="nav-item nav-level-2"><a class="nav-link" href="#Redis-Cluster"><span class="nav-number">1.</span> <span class="nav-text">Redis Cluster</span></a><ol class="nav-child"><li class="nav-item nav-level-3"><a class="nav-link" href="#%E6%95%B0%E6%8D%AE%E5%88%86%E5%8C%BA"><span class="nav-number">1.1.</span> <span class="nav-text">数据分区</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#%E6%95%B0%E6%8D%AE%E5%A4%87%E4%BB%BD"><span class="nav-number">1.2.</span> <span class="nav-text">数据备份</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#%E5%88%86%E5%8C%BA%E5%86%8D%E5%B9%B3%E8%A1%A1"><span class="nav-number">1.3.</span> <span class="nav-text">分区再平衡</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#%E9%9B%86%E7%BE%A4%E7%AE%A1%E7%90%86"><span class="nav-number">1.4.</span> <span class="nav-text">集群管理</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#Redis-Cluster-%E9%85%8D%E7%BD%AE"><span class="nav-number">1.5.</span> <span class="nav-text">Redis Cluster 配置</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#Redis-cluster-%E4%BD%BF%E7%94%A8"><span class="nav-number">1.6.</span> <span class="nav-text">Redis cluster 使用</span></a><ol class="nav-child"><li class="nav-item nav-level-4"><a class="nav-link" href="#redis-cli-%E4%BB%A5%E9%9B%86%E7%BE%A4%E6%96%B9%E5%BC%8F%E5%90%AF%E5%8A%A8"><span class="nav-number">1.6.1.</span> <span class="nav-text">redis-cli 以集群方式启动</span></a></li><li class="nav-item nav-level-4"><a class="nav-link" href="#%E9%87%8D%E6%96%B0%E5%88%86%E7%89%87"><span class="nav-number">1.6.2.</span> <span class="nav-text">重新分片</span></a></li><li class="nav-item nav-level-4"><a class="nav-link" href="#%E6%95%85%E9%9A%9C%E8%BD%AC%E7%A7%BB"><span class="nav-number">1.6.3.</span> <span class="nav-text">故障转移</span></a></li><li class="nav-item nav-level-4"><a class="nav-link" href="#%E6%89%8B%E5%8A%A8%E6%95%85%E9%9A%9C%E8%BD%AC%E7%A7%BB"><span class="nav-number">1.6.4.</span> <span class="nav-text">手动故障转移</span></a></li><li class="nav-item nav-level-4"><a class="nav-link" href="#%E5%A2%9E%E5%8A%A0-%E5%88%A0%E9%99%A4%E8%8A%82%E7%82%B9"><span class="nav-number">1.6.5.</span> <span class="nav-text">增加&#x2F;删除节点</span></a><ol class="nav-child"><li class="nav-item nav-level-5"><a class="nav-link" href="#%E5%A2%9E%E5%8A%A0%E8%8A%82%E7%82%B9"><span class="nav-number">1.6.5.1.</span> <span class="nav-text">增加节点</span></a></li></ol></li><li class="nav-item nav-level-4"><a class="nav-link" href="#%E5%88%A0%E9%99%A4%E8%8A%82%E7%82%B9"><span class="nav-number">1.6.6.</span> <span class="nav-text">删除节点</span></a></li></ol></li></ol></li></ol></div>
+        </div>
+        <!--/noindex-->
+
+        <div class="site-overview-wrap sidebar-panel">
+          <div class="site-overview">
+            <div class="site-author site-overview-item animated" itemprop="author" itemscope itemtype="http://schema.org/Person">
+  <p class="site-author-name" itemprop="name">Hey Moon</p>
+  <div class="site-description" itemprop="description">HeyMoon's cyber log</div>
+</div>
+<div class="site-state-wrap site-overview-item animated">
+  <nav class="site-state">
+      <div class="site-state-item site-state-posts">
+        <a href="/archives/">
+          <span class="site-state-item-count">6</span>
+          <span class="site-state-item-name">posts</span>
+        </a>
+      </div>
+      <div class="site-state-item site-state-categories">
+        <span class="site-state-item-count">1</span>
+        <span class="site-state-item-name">categories</span>
+      </div>
+      <div class="site-state-item site-state-tags">
+        <span class="site-state-item-count">5</span>
+        <span class="site-state-item-name">tags</span>
+      </div>
+  </nav>
+</div>
+  <div class="cc-license site-overview-item animated" itemprop="license">
+    <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" class="cc-opacity" rel="noopener" target="_blank"><img src="https://cdn.jsdelivr.net/npm/@creativecommons/vocabulary@2020.11.3/assets/license_badges/big/by_nc_sa.svg" alt="Creative Commons"></a>
+  </div>
+
+
+
+          </div>
+        </div>
+      </div>
+    </div>
+  </aside>
+  <div class="sidebar-dimmer"></div>
+
+
+    </header>
+
+    
+  <div class="back-to-top" role="button" aria-label="Back to top">
+    <i class="fa fa-arrow-up"></i>
+    <span>0%</span>
+  </div>
+
+  <a href="https://github.com/HeyMoon" class="github-corner" title="Follow me on GitHub" aria-label="Follow me on GitHub" rel="noopener" target="_blank"><svg width="80" height="80" viewBox="0 0 250 250" aria-hidden="true"><path d="M0,0 L115,115 L130,115 L142,142 L250,250 L250,0 Z"></path><path d="M128.3,109.0 C113.8,99.7 119.0,89.6 119.0,89.6 C122.0,82.7 120.5,78.6 120.5,78.6 C119.2,72.0 123.4,76.3 123.4,76.3 C127.3,80.9 125.5,87.3 125.5,87.3 C122.9,97.6 130.6,101.9 134.4,103.2" fill="currentColor" style="transform-origin: 130px 106px;" class="octo-arm"></path><path d="M115.0,115.0 C114.9,115.1 118.7,116.5 119.8,115.4 L133.7,101.6 C136.9,99.2 139.9,98.4 142.2,98.6 C133.8,88.0 127.5,74.4 143.8,58.0 C148.5,53.4 154.0,51.2 159.7,51.0 C160.3,49.4 163.2,43.6 171.4,40.1 C171.4,40.1 176.1,42.5 178.8,56.2 C183.1,58.6 187.2,61.8 190.9,65.4 C194.5,69.0 197.7,73.2 200.1,77.6 C213.8,80.2 216.3,84.9 216.3,84.9 C212.7,93.1 206.9,96.0 205.4,96.6 C205.1,102.4 203.0,107.8 198.3,112.5 C181.9,128.9 168.3,122.5 157.7,114.1 C157.9,116.9 156.7,120.9 152.7,124.9 L141.0,136.5 C139.8,137.7 141.6,141.9 141.8,141.8 Z" fill="currentColor" class="octo-body"></path></svg></a>
+
+<noscript>
+  <div class="noscript-warning">Theme NexT works best with JavaScript enabled</div>
+</noscript>
+
+
+    <div class="main-inner post posts-expand">
+
+
+  
+
+
+<div class="post-block">
+  
+  
+
+  <article itemscope itemtype="http://schema.org/Article" class="post-content" lang="zh">
+    <link itemprop="mainEntityOfPage" href="http://example.com/2021/12/07/Redis-Cluster/">
+
+    <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
+      <meta itemprop="image" content="/images/avatar.gif">
+      <meta itemprop="name" content="Hey Moon">
+      <meta itemprop="description" content="HeyMoon's cyber log">
+    </span>
+
+    <span hidden itemprop="publisher" itemscope itemtype="http://schema.org/Organization">
+      <meta itemprop="name" content="HeyMoon's cyber log">
+    </span>
+      <header class="post-header">
+        <h1 class="post-title" itemprop="name headline">
+          Redis Cluster
+        </h1>
+
+        <div class="post-meta-container">
+          <div class="post-meta">
+    <span class="post-meta-item">
+      <span class="post-meta-item-icon">
+        <i class="far fa-calendar"></i>
+      </span>
+      <span class="post-meta-item-text">Posted on</span>
+      
+
+      <time title="Created: 2021-12-07 22:23:10 / Modified: 22:29:52" itemprop="dateCreated datePublished" datetime="2021-12-07T22:23:10+08:00">2021-12-07</time>
+    </span>
+
+  
+  
+  <span class="post-meta-item">
+    
+      <span class="post-meta-item-icon">
+        <i class="far fa-comment"></i>
+      </span>
+      <span class="post-meta-item-text">Disqus: </span>
+    
+    <a title="disqus" href="/2021/12/07/Redis-Cluster/#disqus_thread" itemprop="discussionUrl">
+      <span class="post-comments-count disqus-comment-count" data-disqus-identifier="2021/12/07/Redis-Cluster/" itemprop="commentCount"></span>
+    </a>
+  </span>
+  
+  
+</div>
+
+        </div>
+      </header>
+
+    
+    
+    
+    <div class="post-body" itemprop="articleBody">
+        <p>当公司业务发展，数据量增加到一定程度后，我们总是绕不开分布式这个话题。这个问题牵扯很多方面，</p>
+<ul>
+<li><p>分区策略（Sharding）</p>
+</li>
+<li><p>数据备份：数据备份什么时候做？粒度是什么？怎样备份？</p>
+</li>
+<li><p>分区再平衡：当数据分布发生拓扑变化的时候，怎么把数据从原来的节点迁移到新的节点上？</p>
+</li>
+<li><p>集群管理：如何管理整个集群，如何把用户请求定向到某个特定的节点上？</p>
+</li>
+</ul>
+<p>这些问题很很多不同的解法，比如分片策略，不同的数据库可能选择不同的分片策略，比如 Hbase 采用基于关键字区间的分区，Cassandra,MongoDB,Redis 采用基于关键字哈希值分区。我们不妨来看看开源社区中使用最普遍的分布式解决方案之一：Redis Cluster，看看它是如何解决分布式的问题。</p>
+<span id="more"></span>
+
+<h2 id="Redis-Cluster"><a href="#Redis-Cluster" class="headerlink" title="Redis Cluster"></a>Redis Cluster</h2><p>Redis Cluster是一个Redis的分布式部署形式，使用数据分区的办法把数据分配到不同的节点；每个节点可以有自己的备份节点（一个或多个）。整个集群之上另有一个叫做Redis Sentinel的分布式组件用以提供更丰富的HA能力。</p>
+<h3 id="数据分区"><a href="#数据分区" class="headerlink" title="数据分区"></a>数据分区</h3><p>Redis Cluster 使用 Slot(槽)的概念，集群的整个数据库被分为 16384 个 slot，16384个 slot 可以分给集群中的多个节点。Redis 把每个key的值 hash(CRC16) 成 0 ~ 16383 之间的一个数。这个 hash 值被用来确定对应的数据存储在哪个 slot 。集群中的每个节点都存储了一份类似路由表的东西，描述每个节点所拥有的 Slots。假设集群里有3个节点(node1, node2, node3)，我们可以这样分配 slot ：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">node1: 0 ~ 5000</span><br><span class="line">node2: 5001 ~ 10000</span><br><span class="line">node3: 10001 ~ 16383</span><br></pre></td></tr></table></figure>
+
+<p>Redis 使用一下算法来计算给定的 key 属于哪个槽：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">def slot_number(key):</span><br><span class="line">    return CRC16(key) &amp; 16383</span><br></pre></td></tr></table></figure>
+
+<p>Slot 是集群数据管理和迁移的最小单位，保证数据管理的粒度易于管理。集群中的每个节点都知道 Slot 在集群中的分布，节点之间使用 Gossip 协议通信。</p>
+<p>当数据库中的 16384 个槽都有节点在处理时，集群处于上线状态(ok)；如果数据库中有任何一个槽没有得到处理，那么集群处于下线状态(fail)。</p>
+<h3 id="数据备份"><a href="#数据备份" class="headerlink" title="数据备份"></a>数据备份</h3><p>Redis的备份是最简单的 Master-Slave 异步复制(AOF)备份。每个 Master 节点都可以有若干个 Slave 跟随；Slave（Replica）可以提供高可靠性（HA)，也可以用作只读节点提供高吞吐量。</p>
+<h3 id="分区再平衡"><a href="#分区再平衡" class="headerlink" title="分区再平衡"></a>分区再平衡</h3><p>分区再平衡，也叫重新分片(Reshard)一般是因为有节点的变化（有节点下线，或者有新的节点加入）。简单的讲，Reshard就是把一些slots从一个节点转移到另一个节点。</p>
+<p>Reshard 的原理并不复杂，基于 redis-trib 对集群的单个 slot 进行重新分片的步骤如下：</p>
+<ul>
+<li><p>redis-trib 对目标节点发送 Cluster setslot <slot> importing <source_id> 命令，让目标节点准备好从源节点导入(import) 属于槽 slot 的键值对</p>
+</li>
+<li><p>redis-trib 对源节点发送 Cluster setslot <slot> migrating <target_id> 命令，让源节点准备好将属于槽 slot 的键值对迁移(migrate)至目标节点</p>
+</li>
+<li><p>redis-trib 将键值对从源节点迁移至目标节点</p>
+</li>
+<li><p>redis-trib 将槽 slot 指派给集群中的任意一个节点，并通过消息发送至整个集群，最终集群中所有节点都会知道槽 slot 被指派给了目标节点。</p>
+</li>
+</ul>
+<h3 id="集群管理"><a href="#集群管理" class="headerlink" title="集群管理"></a>集群管理</h3><p>Redis Cluster 集群管理引入了一个新的组件，叫做 Redis Sentinel，在整个集群的纬度上提供高可用的能力。简单的讲，它类似一个集群的Registry，包含监控、报警、自动切换、配置管理等常见功能。另外，Sentinel本身也是分布式部署，采用 Raft 算法维持状态的一致性。</p>
+<ul>
+<li>Sentinels 监视所有的数据节点</li>
+<li>Sentinels 监视所有其他 Sentinels</li>
+<li>当 Sentinels 对节点宕机达成共识之后，选举出一个新的master（升级）并完成故障转移</li>
+</ul>
+<h3 id="Redis-Cluster-配置"><a href="#Redis-Cluster-配置" class="headerlink" title="Redis Cluster 配置"></a>Redis Cluster 配置</h3><figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">bind 127.0.0.1 -::1</span><br><span class="line">port 7379</span><br><span class="line">daemonize yes</span><br><span class="line">pidfile /Users/dengyunhui/Documents/install/redis-6.2.6/config/cluster/redis_7379.pid</span><br><span class="line">loglevel debug</span><br><span class="line">logfile /Users/dengyunhui/Documents/install/redis-6.2.6/config/cluster/redis_7379.log</span><br><span class="line">cluster-enabled yes</span><br><span class="line">cluster-config-file nodes-7379.conf</span><br><span class="line">cluster-node-timeout 15000</span><br></pre></td></tr></table></figure>
+
+<p>新建文件 <code>cluster-7379.conf</code>,同时复制出五个节点配置：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">cp cluster-7379.conf cluster-7380.conf</span><br><span class="line">cp cluster-7379.conf cluster-7381.conf</span><br><span class="line">cp cluster-7379.conf cluster-7382.conf</span><br><span class="line">cp cluster-7379.conf cluster-7383.conf</span><br><span class="line">cp cluster-7379.conf cluster-7384.conf</span><br></pre></td></tr></table></figure>
+
+<p>删除数据目录下的所有文件,启动 6 个节点：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line">➜  bin ./redis-server ../config/cluster/cluster-7379.conf</span><br><span class="line">➜  bin ./redis-server ../config/cluster/cluster-7380.conf</span><br><span class="line">➜  bin ./redis-server ../config/cluster/cluster-7381.conf</span><br><span class="line">➜  bin ./redis-server ../config/cluster/cluster-7382.conf</span><br><span class="line">➜  bin ./redis-server ../config/cluster/cluster-7383.conf</span><br><span class="line">➜  bin ./redis-server ../config/cluster/cluster-7384.conf</span><br></pre></td></tr></table></figure>
+
+<p>如果在之前的集群中的某个节点存储过数据或者集群配置没有删除，会报类似错误 ** [ERR] Node 127.0.0.1:7379 is not empty. Either the node already knows other nodes (check with CLUSTER NODES) or contains some key in database 0. ** 如果集群配置未删除，则删除所有集群配置，否则进入之前存储数据的客户端执行 flushall 和 cluster reset 清空数据并重置集群。<br>然后重新启动所有节点。只需键入以下内容即可为 Redis 6 创建集群：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">../../bin/redis-cli --cluster create 127.0.0.1:7379 127.0.0.1:7380 127.0.0.1:7381 127.0.0.1:7382 127.0.0.1:7383 127.0.0.1:7384 --cluster-replicas 1</span><br></pre></td></tr></table></figure>
+
+<p>create 后面跟着的是6个节点的地址和端口，选项–cluster-replicas 1意味着为每个主节点都提供一个从节点。出现如下结果即表示创建成功：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br></pre></td><td class="code"><pre><span class="line">&gt;&gt;&gt; Performing hash slots allocation on 6 nodes...</span><br><span class="line">Master[0] -&gt; Slots 0 - 5460</span><br><span class="line">Master[1] -&gt; Slots 5461 - 10922</span><br><span class="line">Master[2] -&gt; Slots 10923 - 16383</span><br><span class="line">Adding replica 127.0.0.1:7383 to 127.0.0.1:7379</span><br><span class="line">Adding replica 127.0.0.1:7384 to 127.0.0.1:7380</span><br><span class="line">Adding replica 127.0.0.1:7382 to 127.0.0.1:7381</span><br><span class="line">&gt;&gt;&gt; Trying to optimize slaves allocation for anti-affinity</span><br><span class="line">[WARNING] Some slaves are in the same host as their master</span><br><span class="line">M: 4ebf3cedca6bcd9ebcadcdaf8d6f591656cf9b4a 127.0.0.1:7379</span><br><span class="line">   slots:[0-5460] (5461 slots) master</span><br><span class="line">M: 6c9e8b7d86e466d0d63c9ceb6603441126158c0b 127.0.0.1:7380</span><br><span class="line">   slots:[5461-10922] (5462 slots) master</span><br><span class="line">M: 82b9f8c549d79c99265dbe89ed286413a260826a 127.0.0.1:7381</span><br><span class="line">   slots:[10923-16383] (5461 slots) master</span><br><span class="line">S: c79437759320e52f5838b1c942ef9ba90b20e32f 127.0.0.1:7382</span><br><span class="line">   replicates 4ebf3cedca6bcd9ebcadcdaf8d6f591656cf9b4a</span><br><span class="line">S: bfc699dbe7967ea0d41dcef430b926ae988ce91a 127.0.0.1:7383</span><br><span class="line">   replicates 6c9e8b7d86e466d0d63c9ceb6603441126158c0b</span><br><span class="line">S: 7919d0bc8c0cd1fc2966ca770106671a97787f1a 127.0.0.1:7384</span><br><span class="line">   replicates 82b9f8c549d79c99265dbe89ed286413a260826a</span><br><span class="line">Can I set the above configuration? (type &#x27;yes&#x27; to accept): yes</span><br><span class="line">&gt;&gt;&gt; Nodes configuration updated</span><br><span class="line">&gt;&gt;&gt; Assign a different config epoch to each node</span><br><span class="line">&gt;&gt;&gt; Sending CLUSTER MEET messages to join the cluster</span><br><span class="line">Waiting for the cluster to join</span><br><span class="line">.</span><br><span class="line">&gt;&gt;&gt; Performing Cluster Check (using node 127.0.0.1:7379)</span><br><span class="line">M: 4ebf3cedca6bcd9ebcadcdaf8d6f591656cf9b4a 127.0.0.1:7379</span><br><span class="line">   slots:[0-5460] (5461 slots) master</span><br><span class="line">   1 additional replica(s)</span><br><span class="line">S: c79437759320e52f5838b1c942ef9ba90b20e32f 127.0.0.1:7382</span><br><span class="line">   slots: (0 slots) slave</span><br><span class="line">   replicates 4ebf3cedca6bcd9ebcadcdaf8d6f591656cf9b4a</span><br><span class="line">M: 6c9e8b7d86e466d0d63c9ceb6603441126158c0b 127.0.0.1:7380</span><br><span class="line">   slots:[5461-10922] (5462 slots) master</span><br><span class="line">   1 additional replica(s)</span><br><span class="line">M: 82b9f8c549d79c99265dbe89ed286413a260826a 127.0.0.1:7381</span><br><span class="line">   slots:[10923-16383] (5461 slots) master</span><br><span class="line">   1 additional replica(s)</span><br><span class="line">S: bfc699dbe7967ea0d41dcef430b926ae988ce91a 127.0.0.1:7383</span><br><span class="line">   slots: (0 slots) slave</span><br><span class="line">   replicates 6c9e8b7d86e466d0d63c9ceb6603441126158c0b</span><br><span class="line">S: 7919d0bc8c0cd1fc2966ca770106671a97787f1a 127.0.0.1:7384</span><br><span class="line">   slots: (0 slots) slave</span><br><span class="line">   replicates 82b9f8c549d79c99265dbe89ed286413a260826a</span><br><span class="line">[OK] All nodes agree about slots configuration.</span><br><span class="line">&gt;&gt;&gt; Check for open slots...</span><br><span class="line">&gt;&gt;&gt; Check slots coverage...</span><br><span class="line">[OK] All 16384 slots covered.</span><br></pre></td></tr></table></figure>
+
+<p>使用 Redis 客户端登录 7379 服务器,使用 <code>cluster info</code> 查看集群状态：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line">➜  bin ./redis-cli -c -p 7379</span><br><span class="line">127.0.0.1:7379&gt; cluster info</span><br><span class="line">cluster_state:ok</span><br><span class="line">cluster_slots_assigned:16384</span><br><span class="line">cluster_slots_ok:16384</span><br><span class="line">cluster_slots_pfail:0</span><br><span class="line">cluster_slots_fail:0</span><br><span class="line">cluster_known_nodes:6</span><br><span class="line">cluster_size:3</span><br><span class="line">cluster_current_epoch:6</span><br><span class="line">cluster_my_epoch:1</span><br><span class="line">cluster_stats_messages_ping_sent:2266</span><br><span class="line">cluster_stats_messages_pong_sent:2152</span><br><span class="line">cluster_stats_messages_sent:4418</span><br><span class="line">cluster_stats_messages_ping_received:2147</span><br><span class="line">cluster_stats_messages_pong_received:2266</span><br><span class="line">cluster_stats_messages_meet_received:5</span><br><span class="line">cluster_stats_messages_received:4418</span><br></pre></td></tr></table></figure>
+
+<h3 id="Redis-cluster-使用"><a href="#Redis-cluster-使用" class="headerlink" title="Redis cluster 使用"></a>Redis cluster 使用</h3><h4 id="redis-cli-以集群方式启动"><a href="#redis-cli-以集群方式启动" class="headerlink" title="redis-cli 以集群方式启动"></a>redis-cli 以集群方式启动</h4><p>redis-cli 记得要加 <code>-c</code> 以集群模式启动。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">➜  bin ./redis-cli -c -p 7379</span><br><span class="line"></span><br><span class="line">127.0.0.1:7379&gt; set fruits apple</span><br><span class="line">-&gt; Redirected to slot [14943] located at 127.0.0.1:7381</span><br><span class="line">OK</span><br></pre></td></tr></table></figure>
+
+<p>当在 7379 使用 <code>set</code> 来设置 <code>fruits</code> 的值时，对应的槽为 14943，这个槽是属于 7381 节点负责的，所以集群模式会自动重定向到 7381 节点来完成 set key 命令。</p>
+<h4 id="重新分片"><a href="#重新分片" class="headerlink" title="重新分片"></a>重新分片</h4><p>重新分片其实也就是槽的迁移。将 Slot 从一个或几个节点迁移到另一个节点。<br>Redis官方也是提供了命令用来重新分片的，如果 Redis 的版本是 3 或者 4 的话使用redis-trib.rb这个工具，如果 Redis 的版本为 5-6的话，可以使用如下命令：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">redis-cli --cluster reshard 127.0.0.1:7379</span><br></pre></td></tr></table></figure>
+
+<p>在这里只需要指定一个节点，redis-cli将自动找到其他节点。<br>首先会测试集群的运行状态，然后询问你要重新分配多少个槽(我这里指定了1000个槽)。 <span style="background-color: #FF0000">How many slots do you want to move (from 1 to 16384)?</span> 然后我们需要指定重新分片的目标ID(也就是指定哪个节点来接收这些重新分配的槽)。可以通过以下命令来查看某个节点的信息(里面包括了节点的ID)。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">redis-cli -p 7379 cluster nodes | grep myself</span><br><span class="line">872e3876ea53a1ba1a77af3fb5a8c72704ac0eab 127.0.0.1:7379@16379 myself,master - 0 1580801413000 7 connected 0-5961 10923-11421</span><br></pre></td></tr></table></figure>
+
+<p>最终需要指定从哪些节点获取槽(这里简单的指定all也就是所有的节点)。就会开始执行重新分片了，通过终端可以看到槽正在从一个节点移动到另一个节点。<br>最后检查集群状态可以发现目标节点的槽数量变成了6461</p>
+<p>输入 <code>cluster slots</code> 查看集群节点 slot 的分配情况：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line">127.0.0.1:7379&gt; cluster slots</span><br><span class="line">1) 1) (integer) 0</span><br><span class="line">   2) (integer) 5460</span><br><span class="line">   3) 1) &quot;127.0.0.1&quot;</span><br><span class="line">      2) (integer) 7379</span><br><span class="line">      3) &quot;4ebf3cedca6bcd9ebcadcdaf8d6f591656cf9b4a&quot;</span><br><span class="line">   4) 1) &quot;127.0.0.1&quot;</span><br><span class="line">      2) (integer) 7382</span><br><span class="line">      3) &quot;c79437759320e52f5838b1c942ef9ba90b20e32f&quot;</span><br><span class="line">2) 1) (integer) 5461</span><br><span class="line">   2) (integer) 10922</span><br><span class="line">   3) 1) &quot;127.0.0.1&quot;</span><br><span class="line">      2) (integer) 7380</span><br><span class="line">      3) &quot;6c9e8b7d86e466d0d63c9ceb6603441126158c0b&quot;</span><br><span class="line">   4) 1) &quot;127.0.0.1&quot;</span><br><span class="line">      2) (integer) 7383</span><br><span class="line">      3) &quot;bfc699dbe7967ea0d41dcef430b926ae988ce91a&quot;</span><br><span class="line">3) 1) (integer) 10923</span><br><span class="line">   2) (integer) 16383</span><br><span class="line">   3) 1) &quot;127.0.0.1&quot;</span><br><span class="line">      2) (integer) 7381</span><br><span class="line">      3) &quot;82b9f8c549d79c99265dbe89ed286413a260826a&quot;</span><br><span class="line">   4) 1) &quot;127.0.0.1&quot;</span><br><span class="line">      2) (integer) 7384</span><br><span class="line">      3) &quot;7919d0bc8c0cd1fc2966ca770106671a97787f1a&quot;</span><br></pre></td></tr></table></figure>
+
+<h4 id="故障转移"><a href="#故障转移" class="headerlink" title="故障转移"></a>故障转移</h4><p>先查看当前集群中的节点：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">➜  cluster ../../bin/redis-cli -p 7379 cluster nodes</span><br><span class="line">bfc699dbe7967ea0d41dcef430b926ae988ce91a 127.0.0.1:7383@17383 slave 6c9e8b7d86e466d0d63c9ceb6603441126158c0b 0 1638885135833 2 connected</span><br><span class="line">82b9f8c549d79c99265dbe89ed286413a260826a 127.0.0.1:7381@17381 master - 0 1638885134819 3 connected 10923-16383</span><br><span class="line">6c9e8b7d86e466d0d63c9ceb6603441126158c0b 127.0.0.1:7380@17380 master - 0 1638885136847 2 connected 5461-10922</span><br><span class="line">7919d0bc8c0cd1fc2966ca770106671a97787f1a 127.0.0.1:7384@17384 slave 82b9f8c549d79c99265dbe89ed286413a260826a 0 1638885133810 3 connected</span><br><span class="line">c79437759320e52f5838b1c942ef9ba90b20e32f 127.0.0.1:7382@17382 slave 4ebf3cedca6bcd9ebcadcdaf8d6f591656cf9b4a 0 1638885133000 1 connected</span><br><span class="line">4ebf3cedca6bcd9ebcadcdaf8d6f591656cf9b4a 127.0.0.1:7379@17379 myself,master - 0 1638885134000 1 connected 0-5460 [14943-&lt;-82b9f8c549d79c99265dbe89ed286413a260826a]</span><br></pre></td></tr></table></figure>
+
+<p>从上面可以看出集群中节点：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">7379(master) -&gt; 7382(slave)</span><br><span class="line">7380(master) -&gt; 7383(slave)</span><br><span class="line">7381(master) -&gt; 7384(slave)</span><br></pre></td></tr></table></figure>
+
+<p>我们使用命令 <code>debug segfault</code> 让 7380 节点崩溃，我们预计 7380 崩溃之后，7383 会成为新的 master 节点。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">./redis-cli -p 7380 debug segfault</span><br></pre></td></tr></table></figure>
+
+<p>然后等待一段时间，再次使用 <code>cluster nodes</code> 查看集群节点，我们发现已经自动完成了故障转移：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">➜  bin ./redis-cli -p 7379 cluster nodes</span><br><span class="line">bfc699dbe7967ea0d41dcef430b926ae988ce91a 127.0.0.1:7383@17383 master - 0 1638885610213 7 connected 5461-10922</span><br><span class="line">82b9f8c549d79c99265dbe89ed286413a260826a 127.0.0.1:7381@17381 master - 0 1638885608000 3 connected 10923-16383</span><br><span class="line">6c9e8b7d86e466d0d63c9ceb6603441126158c0b 127.0.0.1:7380@17380 master,fail - 1638885553442 1638885548000 2 disconnected</span><br><span class="line">7919d0bc8c0cd1fc2966ca770106671a97787f1a 127.0.0.1:7384@17384 slave 82b9f8c549d79c99265dbe89ed286413a260826a 0 1638885609197 3 connected</span><br><span class="line">c79437759320e52f5838b1c942ef9ba90b20e32f 127.0.0.1:7382@17382 slave 4ebf3cedca6bcd9ebcadcdaf8d6f591656cf9b4a 0 1638885608182 1 connected</span><br><span class="line">4ebf3cedca6bcd9ebcadcdaf8d6f591656cf9b4a 127.0.0.1:7379@17379 myself,master - 0 1638885608000 1 connected 0-5460 [14943-&lt;-82b9f8c549d79c99265dbe89ed286413a260826a]</span><br></pre></td></tr></table></figure>
+
+<p>再次启动 7380 ，cluster 会重新将它加入集群，并让它成为从节点最少的那个master节点的从节点(在这里就是 7383)。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">➜  bin ./redis-cli -p 7379 cluster nodes</span><br><span class="line">bfc699dbe7967ea0d41dcef430b926ae988ce91a 127.0.0.1:7383@17383 master - 0 1638885777395 7 connected 5461-10922</span><br><span class="line">82b9f8c549d79c99265dbe89ed286413a260826a 127.0.0.1:7381@17381 master - 0 1638885777000 3 connected 10923-16383</span><br><span class="line">6c9e8b7d86e466d0d63c9ceb6603441126158c0b 127.0.0.1:7380@17380 slave bfc699dbe7967ea0d41dcef430b926ae988ce91a 0 1638885776384 7 connected</span><br><span class="line">7919d0bc8c0cd1fc2966ca770106671a97787f1a 127.0.0.1:7384@17384 slave 82b9f8c549d79c99265dbe89ed286413a260826a 0 1638885776000 3 connected</span><br><span class="line">c79437759320e52f5838b1c942ef9ba90b20e32f 127.0.0.1:7382@17382 slave 4ebf3cedca6bcd9ebcadcdaf8d6f591656cf9b4a 0 1638885778406 1 connected</span><br><span class="line">4ebf3cedca6bcd9ebcadcdaf8d6f591656cf9b4a 127.0.0.1:7379@17379 myself,master - 0 1638885776000 1 connected 0-5460 [14943-&lt;-82b9f8c549d79c99265dbe89ed286413a260826a]</span><br></pre></td></tr></table></figure>
+
+<h4 id="手动故障转移"><a href="#手动故障转移" class="headerlink" title="手动故障转移"></a>手动故障转移</h4><p>随便进入一个从节点(只能是从节点)中，执行 <code>cluster failover</code> 进行手动故障转移(手动故障转移只是将主节点和从节点的关系换了一下)。</p>
+<h4 id="增加-删除节点"><a href="#增加-删除节点" class="headerlink" title="增加/删除节点"></a>增加/删除节点</h4><h5 id="增加节点"><a href="#增加节点" class="headerlink" title="增加节点"></a>增加节点</h5><p>按照之前的配置，新增加一个节点 cluster-7385.conf ，然后启动它。使用以下命令将它加入到集群中。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"># 127.0.0.1:7385 指的是新加入集群中的节点的ip和端口</span><br><span class="line"># 127.0.0.1:7379 指的是集群中的某个节点的ip和地址(随便哪个节点都行)</span><br><span class="line">redis-cli --cluster add-node 127.0.0.1:7385 127.0.0.1:7379</span><br></pre></td></tr></table></figure>
+
+<p>其实这个命令的作用和cluster meet是一样的，就是用于节点握手通信(唯一不一样的就是执行前会检查集群的状态)。<br>还记得之前手动搭建集群的时候，节点握手完成后需要给节点分配槽。因为这里的16384个槽都已经分完了，所以这里使用重新分片来给新节点分配槽(新节点就是重新分片的目标节点)。</p>
+<h4 id="删除节点"><a href="#删除节点" class="headerlink" title="删除节点"></a>删除节点</h4><p>要删除一个从节点，只需使用del-node命令：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"># 127.0.0.1:7379 是集群中的任意一个节点Ip和端口</span><br><span class="line"># node-id就是要删除的节点ID</span><br><span class="line">redis-cli --cluster del-node 127.0.0.1:7379 &lt;node-id&gt;</span><br></pre></td></tr></table></figure>
+
+<p>也可以用相同的方法删除主节点，但是要删除主节点，它必须为空。如果主节点不为空，则需要先将数据从其重新分片到所有其他主节点。否则可以使用手动故障转移的方式将主节点降为从节点，然后再执行删除。</p>
+<p>这里以删除之前添加的 7385 节点为例。该节点共有1999个槽，所以在我们删除节点之前需要将这些槽迁移到其它节点上。这里我将槽全部迁移到目标节点 7384 上，将被删除的节点 7385 作为源节点。</p>
+<p>redis-cli –cluster reshard 127.0.0.1:6374</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">How many slots do you want to move (from 1 to 16384)? 1999</span><br><span class="line">What is the receiving node ID?</span><br><span class="line">f96b0261c775cf10a254f28374a4ed73c2977b1b # 目标节点redis-6375的ID</span><br><span class="line">Please enter all the source node IDs.</span><br><span class="line">  Type &#x27;all&#x27; to use all the nodes as source nodes for the hash slots.</span><br><span class="line">  Type &#x27;done&#x27; once you entered all the source nodes IDs.</span><br><span class="line">Source node #1: 533168c99a03b5593408818dabc1db36396a221f # 源节点redis-6373的ID</span><br><span class="line">Source node #2: done # 只有一个源节点，输入done结束</span><br></pre></td></tr></table></figure>
+
+<p>复制代码迁移结束后检查集群状态,可以发现redis-6373节点的槽为0，然后就可以放心的删除节点啦。</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">redis-cli --cluster check 127.0.0.1:6375</span><br><span class="line">127.0.0.1:6375 (f96b0261...) -&gt; 0 keys | 6356 slots | 1 slaves.</span><br><span class="line">127.0.0.1:6374 (10e8962e...) -&gt; 1 keys | 5672 slots | 1 slaves.</span><br><span class="line">127.0.0.1:6373 (533168c9...) -&gt; 0 keys | 0 slots | 0 slaves.</span><br><span class="line">127.0.0.1:6376 (e80c00d0...) -&gt; 0 keys | 4356 slots | 1 slaves.</span><br></pre></td></tr></table></figure>
+
+<p>复制代码安全的将redis-6373节点从集群中删除（通过日志可以发现，其实redis是先调用 cluster forget忘记节点，然后再将节点下线）</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">redis-cli --cluster del-node 127.0.0.1:6375 533168c99a03b5593408818dabc1db36396a221f</span><br><span class="line">&gt;&gt;&gt; Removing node 533168c99a03b5593408818dabc1db36396a221f from cluster 127.0.0.1:6375</span><br><span class="line">&gt;&gt;&gt; Sending CLUSTER FORGET messages to the cluster...</span><br><span class="line">&gt;&gt;&gt; SHUTDOWN the node.</span><br></pre></td></tr></table></figure>
+
+
+<p>参考：</p>
+<p><a target="_blank" rel="noopener" href="https://redis.io/topics/cluster-tutorial">Redis Tutorial</a></p>
+
+    </div>
+
+    
+    
+    
+
+    <footer class="post-footer">
+
+        
+
+          <div class="post-nav">
+            <div class="post-nav-item">
+                <a href="/2021/12/07/Redis%E4%B8%BB%E4%BB%8E-Sentinel%E9%85%8D%E7%BD%AE/" rel="prev" title="Redis主从-Sentinel配置">
+                  <i class="fa fa-chevron-left"></i> Redis主从-Sentinel配置
+                </a>
+            </div>
+            <div class="post-nav-item">
+            </div>
+          </div>
+    </footer>
+  </article>
+</div>
+
+
+
+
+
+
+    
+  <div class="comments" id="disqus_thread">
+    <noscript>Please enable JavaScript to view the comments powered by Disqus.</noscript>
+  </div>
+  
+</div>
+  </main>
+
+  <footer class="footer">
+    <div class="footer-inner">
+
+
+<div class="copyright">
+  &copy; 
+  <span itemprop="copyrightYear">2021</span>
+  <span class="with-love">
+    <i class="fa fa-heart"></i>
+  </span>
+  <span class="author" itemprop="copyrightHolder">Hey Moon</span>
+</div>
+  <div class="powered-by">Powered by <a href="https://hexo.io/" rel="noopener" target="_blank">Hexo</a> & <a href="https://theme-next.js.org/" rel="noopener" target="_blank">NexT.Gemini</a>
+  </div>
+
+    </div>
+  </footer>
+
+  
+  <script src="https://cdn.jsdelivr.net/npm/animejs@3.2.1/lib/anime.min.js" integrity="sha256-XL2inqUJaslATFnHdJOi9GfQ60on8Wx1C2H8DYiN1xY=" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@next-theme/pjax@0.5.0/pjax.min.js" integrity="sha256-3NkoLDrmHLTYj7csHIZSr0MHAFTXth7Ua/DDt4MRUAg=" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jquery@3.6.0/dist/jquery.min.js" integrity="sha256-/xUj+3OJU5yExlq6GSYGSHk7tPXikynS7ogEvDej/m4=" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@fancyapps/fancybox@3.5.7/dist/jquery.fancybox.min.js" integrity="sha256-yt2kYMy0w8AbtF89WXb2P1rfjcP/HTHLT7097U8Y5b8=" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/medium-zoom@1.0.6/dist/medium-zoom.min.js" integrity="sha256-EdPgYcPk/IIrw7FYeuJQexva49pVRZNmt3LculEr7zM=" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/lozad@1.16.0/dist/lozad.min.js" integrity="sha256-mOFREFhqmHeQbXpK2lp4nA3qooVgACfh88fpJftLBbc=" crossorigin="anonymous"></script>
+<script src="/js/comments.js"></script><script src="/js/utils.js"></script><script src="/js/motion.js"></script><script src="/js/next-boot.js"></script><script src="/js/pjax.js"></script>
+
+  
+<script src="/js/third-party/search/local-search.js"></script>
+
+
+
+  <script class="next-config" data-name="nprogress" type="application/json">{"enable":true,"spinner":true}</script>
+  <script src="/js/third-party/nprogress.js"></script>
+
+  
+
+
+
+
+<script class="next-config" data-name="disqus" type="application/json">{"enable":true,"shortname":"heymoon-github-io","count":true,"i18n":{"disqus":"disqus"}}</script>
+<script src="/js/third-party/comments/disqus.js"></script>
+
+</body>
+</html>
