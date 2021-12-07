@@ -1,21 +1,21 @@
 ---
 title: Introduce DNS
 date: 2021-11-02 22:22:01
-tags: 
+tags:
     - DNS
-categories: 
-    - tech 
+categories:
+    - tech
 ---
 
 ### 什么是 DNS?
 生活中，人们通过例如 google.com 等域名来访问信息。但是 Web 浏览器是通过 IP 地址进行交互的。DNS(Domain Name System) 是一个将域名和IP地址相互映射的分布式数据库，能够使人更方便地访问互联网。DNS使用TCP和UDP端口 53。
 
+<!--more-->
+
 ### 历史
 DNS 起源于互联网的早期，当时互联网是美国国防部为研究目的建立的一个小网络。该网络中计算机的主机名是通过使用位于集中管理的服务器上的单个HOSTS文件进行管理的。需要解决网络主机名的每个站点都下载了此文件。随着互联网上主机数量的增加，更新过程产生的流量以及HOSTS文件的大小也增加了。对新系统的需求变得越来越明显，该系统将提供可伸缩性、分散管理、支持各种数据类型等功能。
 
 1984年引入的 DNS 成为这个新系统。使用 DNS，主机名存在一个数据库中，该数据库可以分布在多台服务器之间，减少了任何一台服务器的负载，并提供了按分区管理此命名系统的能力。DNS支持分层名称，除了HOSTS文件中使用的主机名称到IP地址映射外，还允许注册各种数据类型。由于DNS数据库是分布式的，因此当添加更多服务器时，其潜在大小是无限的，性能不会下降。
-
-<!--more-->
 
 最初的 DNS 基于 Request for Comment (RFC) 882 (Domain Names: Concepts and Facilities) 和 RFC 883 (Domain Names–Implementation and Specification)，随后被 RFC 1034 (Domain Names–Concepts and Facilities), and RFC 1035 (Domain Names–Implementation and Specification) 所取代。
 
@@ -28,7 +28,7 @@ DNS的实现——Berkeley Internet Name Domain（BIND）——最初是为4.3 B
 
 完全限定域名（FQDN,fully qualify domain name）通过指定从引用主机到根的路径中用点分隔的名称列表，唯一标识主机在DNS层次树中的位置。下图显示了Microsoft.com.域中具有名为mydomain的主机的DNS树示例。主机的FQDN将是 mydomain.microsoft.com。
 
-![dns-name-spaces](./dns-name-spaces.gif)
+![dns-name-spaces](https://docs.microsoft.com/en-us/previous-versions/windows/it-pro/windows-server-2008-R2-and-2008/images/dd197427.b806a082-8b59-44cd-87cc-eaaffceef548(ws.10).gif)
 
 从技术上讲，树中使用的任何DNS域名都是一个域名。然而，大多数DNS讨论都根据名称的级别和常用方式，以五种方式之一识别名称。例如，注册到微软（microsoft.com.）的DNS域名被称为二级域名。这是因为名称有两个部分（称为标签），表明它位于树根或树顶部下方的两个级别。大多数DNS域名有两个或多个标签，每个标签都表示树中的新级别。句点用于名称来分隔标签。
 
@@ -86,7 +86,7 @@ DNS 查找的这 8 个步骤返回 example.com 的 IP 地址后，浏览器便�
 9. 浏览器向该 IP 地址发出 HTTP 请求。
 10. 位于该 IP 的服务器返回将在浏览器中呈现的网页（第 10 步）。
 
-![dns-lookup](./dns-lookup-diagram.png)
+![dns-lookup](https://www.cloudflare.com/img/learning/dns/what-is-dns/dns-lookup-diagram.png)
 
 ### DNS 查询有哪些类型？
 
