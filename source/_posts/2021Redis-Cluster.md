@@ -17,6 +17,8 @@ categories:
 
 这些问题很很多不同的解法，比如分片策略，不同的数据库可能选择不同的分片策略，比如 Hbase 采用基于关键字区间的分区，Cassandra,MongoDB,Redis 采用基于关键字哈希值分区。我们不妨来看看开源社区中使用最普遍的分布式解决方案之一：Redis Cluster，看看它是如何解决分布式的问题。
 
+<!--more-->
+
 ## Redis Cluster
 Redis Cluster是一个Redis的分布式部署形式，使用数据分区的办法把数据分配到不同的节点；每个节点可以有自己的备份节点（一个或多个）。整个集群之上另有一个叫做Redis Sentinel的分布式组件用以提供更丰富的HA能力。
 

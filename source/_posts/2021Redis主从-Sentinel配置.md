@@ -21,6 +21,7 @@ tar zxvf redis-6.2.6.tar.gz
 ````
 cd redis-6.2.6
 ````
+<!--more-->
 
 4. 编译
 ````
